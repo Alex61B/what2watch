@@ -8,13 +8,18 @@ datasource db {
 }
 
 model User {
-  id            String   @id @default(uuid())
-  email         String   @unique
+  id            String    @id @default(uuid())
+  email         String    @unique
   displayName   String
   savedServices String[]
   savedFilters  Json?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime  @default(now())
+  name          String?
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
   members       Member[]
+  accounts      Account[]
 }
 
 model Room {
@@ -26,6 +31,7 @@ model Room {
   matchedMovieId    String?
   createdAt         DateTime   @default(now())
   expiresAt         DateTime
+  watchedFilter     Boolean    @default(false)
   members           Member[]
   queue             RoomQueue[]
   votes             Vote[]
@@ -39,20 +45,33 @@ enum RoomStatus {
 }
 
 model Member {
-  id           String   @id @default(uuid())
-  roomId       String
-  userId       String?
-  displayName  String
-  sessionToken String   @unique
-  isHost       Boolean  @default(false)
-  joinedAt     DateTime @default(now())
-  lastSeenAt   DateTime @default(now())
-  leftAt       DateTime?
-  room         Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  user         User?    @relation(fields: [userId], references: [id])
-  votes        Vote[]
+  id            String         @id @default(uuid())
+  roomId        String
+  userId        String?
+  displayName   String
+  sessionToken  String         @unique
+  isHost        Boolean        @default(false)
+  joinedAt      DateTime       @default(now())
+  lastSeenAt    DateTime       @default(now())
+  leftAt        DateTime?
+  room          Room           @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user          User?          @relation(fields: [userId], references: [id])
+  votes         Vote[]
+  watchedMovies WatchedMovie[]
+  memberQueues  MemberQueue[]
 
   @@index([roomId])
+}
+
+model WatchedMovie {
+  id          String   @id @default(uuid())
+  memberId    String
+  tmdbMovieId String
+  markedAt    DateTime @default(now())
+  member      Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, tmdbMovieId])
+  @@index([memberId])
 }
 
 model RoomQueue {
@@ -80,4 +99,41 @@ model Vote {
 
   @@unique([roomId, memberId, tmdbMovieId])
   @@index([roomId, tmdbMovieId, vote])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model MemberQueue {
+  id          String @id @default(uuid())
+  memberId    String
+  tmdbMovieId String
+  position    Int
+  member      Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([memberId, tmdbMovieId])
+  @@index([memberId, position])
 }
