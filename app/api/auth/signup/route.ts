@@ -9,7 +9,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
   }
 
-  const trimmedEmail = (email as string).trim()
+  const trimmedEmail = (email as string).trim().toLowerCase()
   const trimmedName = (displayName as string).trim()
 
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {

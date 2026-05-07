@@ -29,25 +29,35 @@ export default function SignInPage() {
     setLoading(true)
     setError(null)
 
-    const result = await signIn('credentials', {
-      email: email.trim(),
-      password,
-      redirect: false,
-    })
+    try {
+      const result = await signIn('credentials', {
+        email: email.trim(),
+        password,
+        redirect: false,
+      })
 
-    if (result?.error) {
-      setError('Invalid email or password.')
+      if (result?.error) {
+        setError('Invalid email or password.')
+        setLoading(false)
+        return
+      }
+
+      await linkMember()
+      router.push(callbackUrl)
+    } catch {
+      setError('Something went wrong. Please try again.')
       setLoading(false)
-      return
     }
-
-    await linkMember()
-    router.push(callbackUrl)
   }
 
   async function handleGoogleSignIn() {
     setGoogleLoading(true)
-    await signIn('google')
+    try {
+      await signIn('google')
+    } catch {
+      setGoogleLoading(false)
+      setError('Something went wrong. Please try again.')
+    }
   }
 
   return (
