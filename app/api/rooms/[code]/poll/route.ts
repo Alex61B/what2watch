@@ -15,7 +15,7 @@ export async function GET(
   if (!member) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const room = await prisma.room.findUnique({ where: { code } })
-  if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+  if (!room || room.id !== member.roomId) return NextResponse.json({ error: 'Room not found' }, { status: 404 })
 
   // Heartbeat — keep member active
   await prisma.member.update({ where: { id: member.id }, data: { lastSeenAt: new Date() } })
