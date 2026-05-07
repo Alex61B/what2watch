@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getSessionToken } from '@/lib/session'
+import { auth } from '@/auth'
 import { discoverMovies, STREAMING_SERVICES, type ServiceId } from '@/lib/tmdb'
 
 function shuffle<T>(arr: T[]): T[] {
@@ -98,6 +99,22 @@ export async function POST(
   )
   if (memberQueueRows.length > 0) {
     await prisma.memberQueue.createMany({ data: memberQueueRows, skipDuplicates: true })
+  }
+
+  // Persist this room's settings to the host's user preferences if logged in
+  try {
+    const session = await auth()
+    if (session?.user?.id) {
+      await prisma.user.update({
+        where: { id: session.user.id },
+        data: {
+          savedServices: serviceIds,
+          savedFilters: filters,
+        },
+      })
+    }
+  } catch {
+    // Non-fatal — preferences saved on best-effort basis
   }
 
   return NextResponse.json({ queueSize: shuffled.length })

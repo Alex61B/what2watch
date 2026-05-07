@@ -86,6 +86,39 @@ export default function SetupPage() {
           setMaxRuntime(data.filters.maxRuntime ?? "");
           setSelectedGenres(data.filters.genres ?? []);
         }
+
+        // Pre-fill from user's saved preferences if the room is freshly created (no services yet)
+        if ((data.streamingServices ?? []).length === 0) {
+          try {
+            const prefRes = await fetch('/api/user/preferences')
+            if (prefRes.ok) {
+              const prefs = await prefRes.json()
+              if (prefs.savedServices?.length > 0) {
+                setServices(prefs.savedServices)
+                // Also PATCH the room so the server knows about the pre-filled services
+                await fetch(`/api/rooms/${code}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ streamingServices: prefs.savedServices }),
+                })
+              }
+              if (prefs.savedFilters) {
+                const f = prefs.savedFilters as RoomFilters
+                setMinRating(f.minRating ?? 0)
+                setMaxRuntime(f.maxRuntime ?? '')
+                setSelectedGenres(f.genres ?? [])
+                // Also PATCH the room filters
+                await fetch(`/api/rooms/${code}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ filters: f }),
+                })
+              }
+            }
+          } catch {
+            // Non-fatal — pre-fill is best-effort
+          }
+        }
       } catch {
         setLoadError("Failed to load room.");
       }
