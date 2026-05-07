@@ -7,6 +7,7 @@ import { prisma } from '@/lib/prisma'
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
+  // JWT sessions — no Session table required; userId threaded via jwt/session callbacks
   session: { strategy: 'jwt' },
   pages: {
     signIn: '/auth/signin',
