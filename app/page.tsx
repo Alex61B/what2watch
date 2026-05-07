@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { isValidRoomCode } from "@/lib/room-code";
+import AuthStatus from "@/components/AuthStatus";
 
 export default function LandingPage() {
   const router = useRouter();
@@ -78,6 +79,11 @@ export default function LandingPage() {
 
   return (
     <main className="min-h-screen flex flex-col items-center justify-center bg-gray-950 text-white px-4 py-12">
+      {/* Auth status — top-right */}
+      <div className="fixed top-4 right-4">
+        <AuthStatus />
+      </div>
+
       <div className="w-full max-w-md space-y-10">
         {/* Header */}
         <div className="text-center space-y-2">
