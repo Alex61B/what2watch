@@ -15,6 +15,8 @@ interface RoomState {
   status: string;
   streamingServices: string[];
   members: RoomMember[];
+  isCurrentUserHost: boolean;
+  currentMemberId: string | null;
 }
 
 interface PollResponse {
@@ -30,7 +32,13 @@ export default function LobbyPage() {
   const [room, setRoom] = useState<RoomState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [memberCount, setMemberCount] = useState<number | null>(null);
+  const [joined, setJoined] = useState(false);
+  const [joinName, setJoinName] = useState("");
+  const [joinLoading, setJoinLoading] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   const shareUrl =
     typeof window !== "undefined"
@@ -64,6 +72,7 @@ export default function LobbyPage() {
         handleRedirect(data.status);
         setRoom(data);
         setMemberCount(data.members.length);
+        setJoined(data.currentMemberId !== null);
       } catch {
         setLoadError("Failed to load room.");
       }
@@ -87,6 +96,51 @@ export default function LobbyPage() {
 
     return () => clearInterval(interval);
   }, [code, handleRedirect]);
+
+  async function handleJoin(e: React.FormEvent) {
+    e.preventDefault();
+    if (!joinName.trim()) return;
+    setJoinLoading(true);
+    setJoinError(null);
+    try {
+      const res = await fetch(`/api/rooms/${code}/members`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName: joinName.trim() }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to join room.");
+      }
+      // Re-fetch room with the new session cookie now set
+      const roomRes = await fetch(`/api/rooms/${code}`);
+      if (roomRes.ok) {
+        const data: RoomState = await roomRes.json();
+        setRoom(data);
+        setMemberCount(data.members.length);
+      }
+      setJoined(true);
+    } catch (err) {
+      setJoinError(err instanceof Error ? err.message : "Failed to join.");
+      setJoinLoading(false);
+    }
+  }
+
+  async function handleStart() {
+    setStarting(true);
+    setStartError(null);
+    try {
+      const res = await fetch(`/api/rooms/${code}/start`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Failed to start.");
+      }
+      router.push(`/room/${code}/vote`);
+    } catch (err) {
+      setStartError(err instanceof Error ? err.message : "Failed to start.");
+      setStarting(false);
+    }
+  }
 
   async function handleCopy() {
     try {
@@ -114,11 +168,11 @@ export default function LobbyPage() {
     );
   }
 
-  const isHost = room.members.some((m) => m.isHost);
-  // Since the GET /api/rooms/[code] route does not return isCurrentUserHost or
-  // currentMemberId, we cannot highlight the current user in the list.
-  // Pass "" as currentMemberId — known limitation until the API is extended.
-  const currentMemberId = "";
+  const isHost = room.isCurrentUserHost;
+  const currentMemberId = room.currentMemberId ?? "";
+  const count = memberCount ?? room.members.length;
+  const hasEnoughMembers = count >= 2;
+  const hasServices = room.streamingServices.length > 0;
 
   return (
     <main className="min-h-screen bg-gray-950 text-white px-4 py-12">
@@ -133,50 +187,123 @@ export default function LobbyPage() {
           </h1>
         </div>
 
-        {/* Status text */}
-        <p className="text-center text-gray-400">
-          {isHost ? "Ready when you are." : "Waiting for host to start…"}
-        </p>
+        {!joined ? (
+          /* Join form — visitor has no session for this room yet */
+          <section className="bg-gray-900 rounded-2xl p-6 space-y-4">
+            <h2 className="text-lg font-semibold">Join this room</h2>
+            <p className="text-gray-400 text-sm">
+              Enter your name to join the lobby.
+            </p>
+            <form onSubmit={handleJoin} className="space-y-3">
+              <input
+                type="text"
+                placeholder="Your display name"
+                value={joinName}
+                onChange={(e) => setJoinName(e.target.value)}
+                disabled={joinLoading}
+                className="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+              />
+              {joinError && (
+                <p className="text-red-400 text-sm">{joinError}</p>
+              )}
+              <button
+                type="submit"
+                disabled={joinLoading || !joinName.trim()}
+                className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2.5 font-semibold transition-colors"
+              >
+                {joinLoading ? "Joining…" : "Join Room"}
+              </button>
+            </form>
+          </section>
+        ) : (
+          <>
+            {/* Status / CTA */}
+            {isHost ? (
+              hasEnoughMembers ? (
+                hasServices ? (
+                  <div className="space-y-2 text-center">
+                    {startError && (
+                      <p className="text-red-400 text-sm">{startError}</p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleStart}
+                      disabled={starting}
+                      className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3.5 text-lg font-semibold transition-colors"
+                    >
+                      {starting ? "Starting…" : "Start Voting"}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2 text-center">
+                    <p className="text-gray-400 text-sm">
+                      Select streaming services before you start.
+                    </p>
+                    <a
+                      href={`/room/${code}/setup`}
+                      className="inline-block rounded-xl bg-indigo-600 hover:bg-indigo-500 px-6 py-3.5 text-lg font-semibold transition-colors"
+                    >
+                      Set up &amp; start →
+                    </a>
+                  </div>
+                )
+              ) : (
+                <p className="text-center text-gray-400">
+                  Waiting for someone to join…
+                </p>
+              )
+            ) : (
+              <p className="text-center text-gray-400">
+                {hasEnoughMembers
+                  ? "Waiting for the host to start…"
+                  : "Waiting for one more person to join…"}
+              </p>
+            )}
 
-        {/* Member list */}
-        <section className="space-y-2">
-          <p className="text-xs uppercase tracking-widest text-gray-500 font-semibold">
-            Members{memberCount !== null ? ` · ${memberCount}` : ""}
-          </p>
-          <MemberList members={room.members} currentMemberId={currentMemberId} />
-        </section>
+            {/* Member list */}
+            <section className="space-y-2">
+              <p className="text-xs uppercase tracking-widest text-gray-500 font-semibold">
+                Members{memberCount !== null ? ` · ${memberCount}` : ""}
+              </p>
+              <MemberList
+                members={room.members}
+                currentMemberId={currentMemberId}
+              />
+            </section>
 
-        {/* Share link */}
-        <section className="bg-gray-900 rounded-2xl p-6 space-y-3">
-          <h2 className="text-lg font-semibold">Invite others</h2>
-          <p className="text-gray-400 text-sm">
-            Share this link so others can join.
-          </p>
-          <div className="flex items-center gap-3">
-            <span className="flex-1 truncate rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-sm text-gray-300 font-mono">
-              {shareUrl}
-            </span>
-            <button
-              type="button"
-              onClick={handleCopy}
-              className="shrink-0 rounded-lg bg-gray-700 hover:bg-gray-600 px-4 py-2.5 text-sm font-medium transition-colors"
-            >
-              {copied ? "Copied!" : "Copy"}
-            </button>
-          </div>
-        </section>
+            {/* Share link */}
+            <section className="bg-gray-900 rounded-2xl p-6 space-y-3">
+              <h2 className="text-lg font-semibold">Invite others</h2>
+              <p className="text-gray-400 text-sm">
+                Share this link so others can join.
+              </p>
+              <div className="flex items-center gap-3">
+                <span className="flex-1 truncate rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-sm text-gray-300 font-mono">
+                  {shareUrl}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCopy}
+                  className="shrink-0 rounded-lg bg-gray-700 hover:bg-gray-600 px-4 py-2.5 text-sm font-medium transition-colors"
+                >
+                  {copied ? "Copied!" : "Copy"}
+                </button>
+              </div>
+            </section>
 
-        {/* Host-only: Go to Setup link */}
-        {isHost && (
-          <p className="text-center text-sm text-gray-500">
-            Want to change settings?{" "}
-            <a
-              href={`/room/${code}/setup`}
-              className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2 transition-colors"
-            >
-              Go to Setup
-            </a>
-          </p>
+            {/* Host-only: Go to Setup link */}
+            {isHost && (
+              <p className="text-center text-sm text-gray-500">
+                Want to change settings?{" "}
+                <a
+                  href={`/room/${code}/setup`}
+                  className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2 transition-colors"
+                >
+                  Go to Setup
+                </a>
+              </p>
+            )}
+          </>
         )}
       </div>
     </main>

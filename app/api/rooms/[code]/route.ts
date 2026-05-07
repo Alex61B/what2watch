@@ -22,6 +22,14 @@ export async function GET(
 
   if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 })
 
+  const sessionToken = await getSessionToken()
+  const currentMember = sessionToken
+    ? await prisma.member.findFirst({
+        where: { sessionToken, roomId: room.id },
+        select: { id: true, isHost: true },
+      })
+    : null
+
   let matchedMovie = null
   if (room.matchedMovieId) {
     try {
@@ -42,6 +50,8 @@ export async function GET(
     filters: room.filters,
     members: room.members,
     matchedMovie,
+    isCurrentUserHost: currentMember?.isHost ?? false,
+    currentMemberId: currentMember?.id ?? null,
   })
 }
 
