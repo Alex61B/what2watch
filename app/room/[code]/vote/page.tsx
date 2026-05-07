@@ -88,7 +88,9 @@ export default function VotePage() {
         const res = await fetch(`/api/rooms/${code}/poll`);
         if (!res.ok) return;
         const data: PollResponse = await res.json();
-        setWatchedFilterActive(data.watchedFilter ?? false);
+        if (typeof data.watchedFilter === 'boolean') {
+          setWatchedFilterActive(data.watchedFilter);
+        }
         if (data.status === "MATCHED") {
           stopPolling();
           router.replace(`/room/${code}/match`);

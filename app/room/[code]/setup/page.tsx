@@ -44,6 +44,8 @@ export default function SetupPage() {
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
 
+  const [patchingWatchedFilter, setPatchingWatchedFilter] = useState(false);
+
   const [copied, setCopied] = useState(false);
 
   // Fetch room on mount and redirect if needed
@@ -124,13 +126,21 @@ export default function SetupPage() {
 
   // Patch watchedFilter (top-level boolean, separate from filters JSON)
   const patchWatchedFilter = useCallback(async (enabled: boolean) => {
-    setWatchedFilter(enabled);
-    await fetch(`/api/rooms/${code}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ watchedFilter: enabled }),
-    });
-  }, [code]);
+    if (patchingWatchedFilter) return;
+    setPatchingWatchedFilter(true);
+    setWatchedFilter(enabled);  // optimistic update
+    try {
+      await fetch(`/api/rooms/${code}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ watchedFilter: enabled }),
+      });
+    } catch {
+      setWatchedFilter(!enabled);  // revert on error
+    } finally {
+      setPatchingWatchedFilter(false);
+    }
+  }, [code, patchingWatchedFilter]);
 
   function handleGenreToggle(genreId: number) {
     const updated = selectedGenres.includes(genreId)
@@ -320,7 +330,8 @@ export default function SetupPage() {
               role="switch"
               aria-checked={watchedFilter}
               onClick={() => patchWatchedFilter(!watchedFilter)}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+              disabled={patchingWatchedFilter}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-60 ${
                 watchedFilter ? "bg-indigo-600" : "bg-gray-700"
               }`}
             >

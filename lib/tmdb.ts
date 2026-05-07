@@ -1,6 +1,23 @@
 const TMDB_BASE = 'https://api.themoviedb.org/3'
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500'
 
+export const TMDB_GENRES = [
+  { id: 28,    name: 'Action' },
+  { id: 12,    name: 'Adventure' },
+  { id: 16,    name: 'Animation' },
+  { id: 35,    name: 'Comedy' },
+  { id: 80,    name: 'Crime' },
+  { id: 99,    name: 'Documentary' },
+  { id: 18,    name: 'Drama' },
+  { id: 10751, name: 'Family' },
+  { id: 14,    name: 'Fantasy' },
+  { id: 27,    name: 'Horror' },
+  { id: 9648,  name: 'Mystery' },
+  { id: 10749, name: 'Romance' },
+  { id: 878,   name: 'Sci-Fi' },
+  { id: 53,    name: 'Thriller' },
+] as const
+
 export const STREAMING_SERVICES = [
   { id: 'netflix',  name: 'Netflix',       tmdbId: 8    },
   { id: 'prime',    name: 'Amazon Prime',  tmdbId: 9    },

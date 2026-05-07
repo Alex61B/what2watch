@@ -38,23 +38,15 @@ export async function GET(
   // Watched: conditional based on room.watchedFilter setting
   let watchedIds: string[]
   if (room.watchedFilter) {
-    // Room-wide: exclude movies watched by anyone in this room
-    const roomWatched = await prisma.watchedMovie.findMany({
-      where: { member: { roomId: room.id } },
+    // Single OR query: room-wide + cross-room (if logged in)
+    const where = member.userId
+      ? { OR: [{ member: { roomId: room.id } }, { member: { userId: member.userId } }] }
+      : { member: { roomId: room.id } }
+    watchedIds = await prisma.watchedMovie.findMany({
+      where,
       select: { tmdbMovieId: true },
       distinct: ['tmdbMovieId'],
     }).then(rows => rows.map(r => r.tmdbMovieId))
-
-    // Cross-room: if logged in, also exclude movies watched in any previous room
-    const crossRoomWatched = member.userId
-      ? await prisma.watchedMovie.findMany({
-          where: { member: { userId: member.userId } },
-          select: { tmdbMovieId: true },
-          distinct: ['tmdbMovieId'],
-        }).then(rows => rows.map(r => r.tmdbMovieId))
-      : []
-
-    watchedIds = [...new Set([...roomWatched, ...crossRoomWatched])]
   } else {
     // Personal only: exclude movies only this member has marked watched
     watchedIds = await prisma.watchedMovie.findMany({
