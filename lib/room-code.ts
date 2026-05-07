@@ -5,7 +5,7 @@ const ADJECTIVES = [
   'FINE', 'FIRM', 'FLAT', 'FOLK', 'FOND', 'FREE', 'FULL', 'FUME', 'GILT', 'GLAD',
   'GLUM', 'GOLD', 'GONE', 'GOOD', 'GRAY', 'GRIM', 'HAZY', 'HIGH', 'HOLY', 'HUGE',
   'IRON', 'ICED', 'INKY', 'JADE', 'JUST', 'KEEN', 'KIND', 'LAME', 'LANK', 'LAZY',
-  'LEAN', 'LIMP', 'LOUD', 'LUSH', 'MILD', 'MINT', 'MIST', 'MOODY', 'MUTE', 'NEAT',
+  'LEAN', 'LIMP', 'LOUD', 'LUSH', 'MILD', 'MINT', 'MIST', 'MOUE', 'MUTE', 'NEAT',
   'NEON', 'NICE', 'NOIR', 'NUDE', 'OILY', 'OKAY', 'OPEN', 'OVAL', 'PALE', 'PINE',
   'PINK', 'PURE', 'RARE', 'REAL', 'RICH', 'ROSY', 'RUBY', 'RUDE', 'RUST', 'SAGE',
   'SALT', 'SLIM', 'SLOW', 'SOFT', 'SOLE', 'TEAL', 'THIN', 'VAST', 'WILD', 'ZANY',
