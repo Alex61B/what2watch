@@ -70,7 +70,9 @@ export default function VotePage() {
 
   // Initial fetch
   useEffect(() => {
-    fetchQueue();
+    void (async () => {
+      await fetchQueue();
+    })();
   }, [fetchQueue]);
 
   // Polling every 3 seconds
