@@ -33,6 +33,11 @@ export interface DiscoverFilters {
 const cache = new Map<string, { data: unknown; expiresAt: number }>()
 
 async function tmdbFetch<T>(url: string): Promise<T> {
+  const key = process.env.TMDB_API_KEY
+  if (!key || key === 'your_tmdb_api_key_here') {
+    throw new Error('TMDB_API_KEY is not configured. Set it in .env.local.')
+  }
+
   const cached = cache.get(url)
   if (cached && cached.expiresAt > Date.now()) return cached.data as T
 
@@ -43,7 +48,7 @@ async function tmdbFetch<T>(url: string): Promise<T> {
   return data as T
 }
 
-export function buildDiscoverUrl(serviceIds: string[], filters: DiscoverFilters): string {
+export function buildDiscoverUrl(serviceIds: ServiceId[], filters: DiscoverFilters): string {
   const providerIds = serviceIds
     .map(id => STREAMING_SERVICES.find(s => s.id === id)?.tmdbId)
     .filter((id): id is number => id !== undefined)
@@ -82,7 +87,7 @@ export function parseMovieResult(raw: Record<string, unknown>): TmdbMovie {
 }
 
 export async function discoverMovies(
-  serviceIds: string[],
+  serviceIds: ServiceId[],
   filters: DiscoverFilters,
   maxResults = 60
 ): Promise<TmdbMovie[]> {
