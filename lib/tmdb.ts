@@ -51,7 +51,7 @@ async function tmdbFetch<T>(url: string): Promise<T> {
 export function buildDiscoverUrl(serviceIds: ServiceId[], filters: DiscoverFilters): string {
   const providerIds = serviceIds
     .map(id => STREAMING_SERVICES.find(s => s.id === id)?.tmdbId)
-    .filter((id): id is number => id !== undefined)
+    .filter((id): id is NonNullable<typeof id> => id !== undefined)
     .join('|')
 
   const params = new URLSearchParams({
