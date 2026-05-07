@@ -35,12 +35,33 @@ export async function GET(
     distinct: ['tmdbMovieId'],
   }).then(rows => rows.map(r => r.tmdbMovieId))
 
-  // Watched: any member in this room has marked as watched
-  const watchedIds = await prisma.watchedMovie.findMany({
-    where: { member: { roomId: room.id } },
-    select: { tmdbMovieId: true },
-    distinct: ['tmdbMovieId'],
-  }).then(rows => rows.map(r => r.tmdbMovieId))
+  // Watched: conditional based on room.watchedFilter setting
+  let watchedIds: string[]
+  if (room.watchedFilter) {
+    // Room-wide: exclude movies watched by anyone in this room
+    const roomWatched = await prisma.watchedMovie.findMany({
+      where: { member: { roomId: room.id } },
+      select: { tmdbMovieId: true },
+      distinct: ['tmdbMovieId'],
+    }).then(rows => rows.map(r => r.tmdbMovieId))
+
+    // Cross-room: if logged in, also exclude movies watched in any previous room
+    const crossRoomWatched = member.userId
+      ? await prisma.watchedMovie.findMany({
+          where: { member: { userId: member.userId } },
+          select: { tmdbMovieId: true },
+          distinct: ['tmdbMovieId'],
+        }).then(rows => rows.map(r => r.tmdbMovieId))
+      : []
+
+    watchedIds = [...new Set([...roomWatched, ...crossRoomWatched])]
+  } else {
+    // Personal only: exclude movies only this member has marked watched
+    watchedIds = await prisma.watchedMovie.findMany({
+      where: { memberId: member.id },
+      select: { tmdbMovieId: true },
+    }).then(rows => rows.map(r => r.tmdbMovieId))
+  }
 
   const excludedIds = [...new Set([...votedIds, ...rejectedIds, ...watchedIds])]
   const notInClause = excludedIds.length ? excludedIds : ['__none__']

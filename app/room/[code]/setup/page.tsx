@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 import StreamingServicePicker from "@/components/StreamingServicePicker";
-import { ServiceId } from "@/lib/tmdb";
+import { ServiceId, TMDB_GENRES } from "@/lib/tmdb";
 
 interface RoomFilters {
   genres?: number[];
@@ -21,6 +21,7 @@ interface RoomState {
   status: "LOBBY" | "VOTING" | "MATCHED" | "DONE";
   streamingServices: ServiceId[];
   filters: RoomFilters | null;
+  watchedFilter: boolean;
   members: RoomMember[];
   isCurrentUserHost: boolean;
 }
@@ -37,6 +38,8 @@ export default function SetupPage() {
   const [services, setServices] = useState<ServiceId[]>([]);
   const [minRating, setMinRating] = useState<number | "">(0);
   const [maxRuntime, setMaxRuntime] = useState<number | "">("");
+  const [selectedGenres, setSelectedGenres] = useState<number[]>([]);
+  const [watchedFilter, setWatchedFilter] = useState(false);
 
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
@@ -75,9 +78,11 @@ export default function SetupPage() {
 
         setRoom(data);
         setServices(data.streamingServices ?? []);
+        setWatchedFilter(data.watchedFilter ?? false);
         if (data.filters) {
           setMinRating(data.filters.minRating ?? 0);
           setMaxRuntime(data.filters.maxRuntime ?? "");
+          setSelectedGenres(data.filters.genres ?? []);
         }
       } catch {
         setLoadError("Failed to load room.");
@@ -105,6 +110,7 @@ export default function SetupPage() {
       const current: RoomFilters = {
         minRating: minRating === "" ? undefined : Number(minRating),
         maxRuntime: maxRuntime === "" ? undefined : Number(maxRuntime),
+        genres: selectedGenres.length ? selectedGenres : undefined,
       };
       const merged = { ...current, ...partial };
       await fetch(`/api/rooms/${code}`, {
@@ -113,8 +119,26 @@ export default function SetupPage() {
         body: JSON.stringify({ filters: merged }),
       });
     },
-    [code, minRating, maxRuntime]
+    [code, minRating, maxRuntime, selectedGenres]
   );
+
+  // Patch watchedFilter (top-level boolean, separate from filters JSON)
+  const patchWatchedFilter = useCallback(async (enabled: boolean) => {
+    setWatchedFilter(enabled);
+    await fetch(`/api/rooms/${code}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ watchedFilter: enabled }),
+    });
+  }, [code]);
+
+  function handleGenreToggle(genreId: number) {
+    const updated = selectedGenres.includes(genreId)
+      ? selectedGenres.filter(id => id !== genreId)
+      : [...selectedGenres, genreId];
+    setSelectedGenres(updated);
+    patchFilters({ genres: updated.length ? updated : undefined });
+  }
 
   function handleMinRatingChange(e: React.ChangeEvent<HTMLInputElement>) {
     const val = parseFloat(e.target.value);
@@ -254,6 +278,58 @@ export default function SetupPage() {
               onChange={handleMaxRuntimeChange}
               className="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
+          </div>
+
+          {/* Genres */}
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-gray-300">
+              Genres{" "}
+              <span className="text-gray-500 font-normal">
+                {selectedGenres.length === 0 ? "(any)" : `(${selectedGenres.length} selected)`}
+              </span>
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {TMDB_GENRES.map(genre => {
+                const active = selectedGenres.includes(genre.id);
+                return (
+                  <button
+                    key={genre.id}
+                    type="button"
+                    onClick={() => handleGenreToggle(genre.id)}
+                    className={`rounded-full px-3 py-1 text-sm font-medium transition-colors ${
+                      active
+                        ? "bg-indigo-600 text-white"
+                        : "bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200"
+                    }`}
+                  >
+                    {genre.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Watched history filter */}
+          <div className="flex items-center justify-between">
+            <label htmlFor="watchedFilter" className="text-sm font-medium text-gray-300">
+              Exclude movies anyone here has already seen
+            </label>
+            <button
+              id="watchedFilter"
+              type="button"
+              role="switch"
+              aria-checked={watchedFilter}
+              onClick={() => patchWatchedFilter(!watchedFilter)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                watchedFilter ? "bg-indigo-600" : "bg-gray-700"
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  watchedFilter ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
           </div>
         </section>
 

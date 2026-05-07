@@ -29,6 +29,8 @@ interface VoteResponse {
 
 interface PollResponse {
   status: string;
+  rejectedMovieIds?: string[];
+  watchedFilter?: boolean;
 }
 
 export default function VotePage() {
@@ -41,6 +43,9 @@ export default function VotePage() {
   ); // undefined = loading, null = exhausted
   const [submitting, setSubmitting] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [swipeDir, setSwipeDir] = useState<"left" | "right" | null>(null);
+  const [markingWatched, setMarkingWatched] = useState(false);
+  const [watchedFilterActive, setWatchedFilterActive] = useState(false);
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stoppedRef = useRef(false);
@@ -83,13 +88,26 @@ export default function VotePage() {
         const res = await fetch(`/api/rooms/${code}/poll`);
         if (!res.ok) return;
         const data: PollResponse = await res.json();
+        setWatchedFilterActive(data.watchedFilter ?? false);
         if (data.status === "MATCHED") {
           stopPolling();
           router.replace(`/room/${code}/match`);
+          return;
         } else if (data.status === "DONE") {
           stopPolling();
           router.replace(`/room/${code}/done`);
+          return;
         }
+        // Auto-advance if the current movie was globally rejected by another user
+        setCurrent(prev => {
+          if (
+            prev?.movie &&
+            data.rejectedMovieIds?.includes(prev.movie.tmdbId)
+          ) {
+            void fetchQueue();
+          }
+          return prev;
+        });
       } catch {
         // silently ignore poll errors
       }
@@ -101,7 +119,21 @@ export default function VotePage() {
         pollingRef.current = null;
       }
     };
-  }, [code, router, stopPolling]);
+  }, [code, router, stopPolling, fetchQueue]);
+
+  const animateAndAdvance = useCallback(
+    async (direction: "left" | "right", action: () => Promise<void>) => {
+      setSwipeDir(direction);
+      // Run animation and action in parallel; advance queue after both settle
+      await Promise.all([
+        action(),
+        new Promise<void>(resolve => setTimeout(resolve, 300)),
+      ]);
+      setSwipeDir(null);
+      await fetchQueue();
+    },
+    [fetchQueue]
+  );
 
   const handleVote = useCallback(
     async (vote: boolean) => {
@@ -110,32 +142,48 @@ export default function VotePage() {
 
       setSubmitting(true);
       try {
-        const res = await fetch(`/api/rooms/${code}/votes`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tmdbMovieId, vote }),
-        });
-
-        if (res.ok) {
-          const data: VoteResponse = await res.json();
-          if (data.matched) {
-            stopPolling();
-            router.replace(`/room/${code}/match`);
-            return;
+        await animateAndAdvance(vote ? "right" : "left", async () => {
+          const res = await fetch(`/api/rooms/${code}/votes`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tmdbMovieId, vote }),
+          });
+          if (res.ok) {
+            const data: VoteResponse = await res.json();
+            if (data.matched) {
+              stopPolling();
+              router.replace(`/room/${code}/match`);
+            }
           }
-        }
-
-        // Fetch next movie regardless of vote response errors
-        await fetchQueue();
+        });
       } catch {
-        // On network error, still try to advance
         await fetchQueue();
       } finally {
         setSubmitting(false);
       }
     },
-    [submitting, current, code, router, stopPolling, fetchQueue]
+    [submitting, current, code, router, stopPolling, fetchQueue, animateAndAdvance]
   );
+
+  const handleMarkWatched = useCallback(async () => {
+    if (markingWatched || current === undefined || current === null) return;
+    const tmdbMovieId = current.movie.tmdbId;
+
+    setMarkingWatched(true);
+    try {
+      await animateAndAdvance("left", async () => {
+        await fetch(`/api/rooms/${code}/watched`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tmdbMovieId }),
+        });
+      });
+    } catch {
+      await fetchQueue();
+    } finally {
+      setMarkingWatched(false);
+    }
+  }, [markingWatched, current, code, fetchQueue, animateAndAdvance]);
 
   // Error state
   if (fetchError) {
@@ -185,11 +233,36 @@ export default function VotePage() {
             {current.remaining} movie{current.remaining !== 1 ? "s" : ""} left
           </span>
         </div>
+        {watchedFilterActive && (
+          <p className="text-xs text-indigo-400">Watched filter active</p>
+        )}
 
-        {/* Voting card — buttons are inside the component; disable while submitting */}
-        <div className={submitting ? "pointer-events-none opacity-60" : ""}>
+        {/* Voting card with swipe animation */}
+        <div
+          className={submitting || markingWatched ? "pointer-events-none" : ""}
+          style={{
+            transform:
+              swipeDir === "left"
+                ? "translateX(-120%) rotate(-10deg)"
+                : swipeDir === "right"
+                ? "translateX(120%) rotate(10deg)"
+                : "none",
+            opacity: swipeDir ? 0 : 1,
+            transition: "transform 0.3s ease, opacity 0.3s ease",
+          }}
+        >
           <VotingCard movie={current.movie} onVote={handleVote} />
         </div>
+
+        {/* Already watched */}
+        <button
+          type="button"
+          onClick={handleMarkWatched}
+          disabled={markingWatched || submitting}
+          className="w-full rounded-xl border border-gray-700 bg-transparent hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-2.5 text-sm font-medium text-gray-400 hover:text-gray-200 transition-colors"
+        >
+          {markingWatched ? "Marking…" : "Already seen it"}
+        </button>
 
         {/* Submission indicator */}
         {submitting && (

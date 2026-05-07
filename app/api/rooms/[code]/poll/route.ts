@@ -37,5 +37,12 @@ export async function GET(
     }
   }
 
-  return NextResponse.json({ status: room.status, memberCount, matchedMovie })
+  // Globally rejected movie IDs — needed by clients to auto-advance away from rejected cards
+  const rejectedMovieIds = await prisma.vote.findMany({
+    where: { roomId: room.id, vote: false },
+    select: { tmdbMovieId: true },
+    distinct: ['tmdbMovieId'],
+  }).then(rows => rows.map(r => r.tmdbMovieId))
+
+  return NextResponse.json({ status: room.status, memberCount, matchedMovie, rejectedMovieIds, watchedFilter: room.watchedFilter })
 }

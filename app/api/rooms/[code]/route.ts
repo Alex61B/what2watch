@@ -48,6 +48,7 @@ export async function GET(
     status: room.status,
     streamingServices: room.streamingServices,
     filters: room.filters,
+    watchedFilter: room.watchedFilter,
     members: room.members,
     matchedMovie,
     isCurrentUserHost: currentMember?.isHost ?? false,
@@ -74,16 +75,19 @@ export async function PATCH(
   }
 
   const body = await request.json().catch(() => ({}))
+  const updateData: Record<string, unknown> = {}
+  if (Array.isArray(body.streamingServices)) updateData.streamingServices = body.streamingServices
+  if (body.filters !== undefined) updateData.filters = body.filters
+  if (typeof body.watchedFilter === 'boolean') updateData.watchedFilter = body.watchedFilter
+
   const updated = await prisma.room.update({
     where: { id: room.id },
-    data: {
-      ...(Array.isArray(body.streamingServices) && { streamingServices: body.streamingServices }),
-      ...(body.filters !== undefined && { filters: body.filters }),
-    },
+    data: updateData,
   })
 
   return NextResponse.json({
     streamingServices: updated.streamingServices,
     filters: updated.filters,
+    watchedFilter: updated.watchedFilter,
   })
 }
