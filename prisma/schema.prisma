@@ -1,15 +1,81 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
-  provider = "prisma-client"
-  output   = "../app/generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  displayName   String
+  savedServices String[]
+  savedFilters  Json?
+  createdAt     DateTime @default(now())
+  members       Member[]
+}
+
+model Room {
+  id                String     @id @default(uuid())
+  code              String     @unique
+  hostMemberId      String
+  streamingServices String[]
+  filters           Json?
+  status            RoomStatus @default(LOBBY)
+  matchedMovieId    String?
+  createdAt         DateTime   @default(now())
+  expiresAt         DateTime
+  members           Member[]
+  queue             RoomQueue[]
+  votes             Vote[]
+}
+
+enum RoomStatus {
+  LOBBY
+  VOTING
+  MATCHED
+  DONE
+}
+
+model Member {
+  id           String   @id @default(uuid())
+  roomId       String
+  userId       String?
+  displayName  String
+  sessionToken String   @unique
+  isHost       Boolean  @default(false)
+  joinedAt     DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+  room         Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user         User?    @relation(fields: [userId], references: [id])
+  votes        Vote[]
+}
+
+model RoomQueue {
+  id               String @id @default(uuid())
+  roomId           String
+  tmdbMovieId      String
+  position         Int
+  streamingService String
+  watchUrl         String
+  room             Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, tmdbMovieId])
+  @@index([roomId, position])
+}
+
+model Vote {
+  id          String   @id @default(uuid())
+  roomId      String
+  memberId    String
+  tmdbMovieId String
+  vote        Boolean
+  votedAt     DateTime @default(now())
+  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  member      Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([roomId, memberId, tmdbMovieId])
+  @@index([roomId, tmdbMovieId, vote])
 }
