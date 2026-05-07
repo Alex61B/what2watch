@@ -2,6 +2,15 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { generateSessionToken } from '@/lib/session'
 
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ code: string }> }
@@ -16,7 +25,7 @@ export async function POST(
 
   const room = await prisma.room.findUnique({ where: { code } })
   if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 })
-  if (room.status !== 'LOBBY') {
+  if (room.status !== 'LOBBY' && room.status !== 'VOTING') {
     return NextResponse.json({ error: 'Room is no longer accepting members' }, { status: 409 })
   }
 
@@ -29,6 +38,27 @@ export async function POST(
       isHost: false,
     },
   })
+
+  // If voting has already started, create a per-member queue for this late joiner
+  if (room.status === 'VOTING') {
+    const roomMovieIds = await prisma.roomQueue.findMany({
+      where: { roomId: room.id },
+      select: { tmdbMovieId: true },
+      orderBy: { position: 'asc' },
+    }).then(rows => rows.map(r => r.tmdbMovieId))
+
+    if (roomMovieIds.length > 0) {
+      const shuffledForMember = shuffle([...roomMovieIds])
+      await prisma.memberQueue.createMany({
+        data: shuffledForMember.map((tmdbMovieId, position) => ({
+          memberId: member.id,
+          tmdbMovieId,
+          position,
+        })),
+        skipDuplicates: true,
+      })
+    }
+  }
 
   const response = NextResponse.json({ memberId: member.id })
   response.cookies.set('w2w_session', sessionToken, {

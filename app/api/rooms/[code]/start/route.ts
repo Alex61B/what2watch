@@ -87,5 +87,18 @@ export async function POST(
     }),
   ])
 
+  // Build per-member shuffled queues from the shared movie pool
+  const movieIds = shuffled.map(m => m.tmdbId)
+  const memberQueueRows = room.members.flatMap(m =>
+    shuffle([...movieIds]).map((tmdbMovieId, position) => ({
+      memberId: m.id,
+      tmdbMovieId,
+      position,
+    }))
+  )
+  if (memberQueueRows.length > 0) {
+    await prisma.memberQueue.createMany({ data: memberQueueRows, skipDuplicates: true })
+  }
+
   return NextResponse.json({ queueSize: shuffled.length })
 }

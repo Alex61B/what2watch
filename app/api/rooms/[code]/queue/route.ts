@@ -22,33 +22,59 @@ export async function GET(
   // Update lastSeenAt so inactive-member detection works
   await prisma.member.update({ where: { id: member.id }, data: { lastSeenAt: new Date() } })
 
-  // Find movies this member has already voted on
+  // Movies this member has already voted on
   const votedIds = await prisma.vote.findMany({
     where: { roomId: room.id, memberId: member.id },
     select: { tmdbMovieId: true },
   }).then(rows => rows.map(r => r.tmdbMovieId))
 
-  // Next unvoted movie in queue order
-  const nextEntry = await prisma.roomQueue.findFirst({
-    where: { roomId: room.id, tmdbMovieId: { notIn: votedIds.length ? votedIds : ['__none__'] } },
+  // Globally rejected: any NO vote by any member in this room
+  const rejectedIds = await prisma.vote.findMany({
+    where: { roomId: room.id, vote: false },
+    select: { tmdbMovieId: true },
+    distinct: ['tmdbMovieId'],
+  }).then(rows => rows.map(r => r.tmdbMovieId))
+
+  // Watched: any member in this room has marked as watched
+  const watchedIds = await prisma.watchedMovie.findMany({
+    where: { member: { roomId: room.id } },
+    select: { tmdbMovieId: true },
+    distinct: ['tmdbMovieId'],
+  }).then(rows => rows.map(r => r.tmdbMovieId))
+
+  const excludedIds = [...new Set([...votedIds, ...rejectedIds, ...watchedIds])]
+  const notInClause = excludedIds.length ? excludedIds : ['__none__']
+
+  // Next movie in THIS member's personal shuffled order
+  const memberQueueEntry = await prisma.memberQueue.findFirst({
+    where: { memberId: member.id, tmdbMovieId: { notIn: notInClause } },
     orderBy: { position: 'asc' },
   })
 
-  if (!nextEntry) {
-    const total = await prisma.roomQueue.count({ where: { roomId: room.id } })
-    return NextResponse.json({ movie: null, remaining: 0, total })
+  if (!memberQueueEntry) {
+    // Return JSON null so the client's `current === null` guard fires correctly
+    return NextResponse.json(null)
   }
 
-  const remaining = await prisma.roomQueue.count({
-    where: { roomId: room.id, tmdbMovieId: { notIn: votedIds.length ? votedIds : ['__none__'] } },
+  // Get streaming metadata from the shared RoomQueue
+  const nextEntry = await prisma.roomQueue.findUnique({
+    where: { roomId_tmdbMovieId: { roomId: room.id, tmdbMovieId: memberQueueEntry.tmdbMovieId } },
+  })
+
+  if (!nextEntry) {
+    return NextResponse.json(null)
+  }
+
+  const remaining = await prisma.memberQueue.count({
+    where: { memberId: member.id, tmdbMovieId: { notIn: notInClause } },
   })
 
   let movie
   try {
     movie = await getMovieById(nextEntry.tmdbMovieId)
   } catch {
-    // TMDB unavailable — skip this movie by returning null with remaining count
-    return NextResponse.json({ movie: null, remaining, tmdbError: true })
+    // TMDB unavailable — return null so client advances
+    return NextResponse.json(null)
   }
 
   return NextResponse.json({
