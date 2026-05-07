@@ -48,6 +48,9 @@ export async function POST(
   const serviceIds = room.streamingServices.filter(
     (s): s is ServiceId => validServiceIds.includes(s as ServiceId)
   )
+  if (serviceIds.length === 0) {
+    return NextResponse.json({ error: 'No valid streaming services found' }, { status: 400 })
+  }
 
   const filters = (room.filters ?? {}) as { genres?: number[]; maxRuntime?: number; minRating?: number }
 
@@ -75,6 +78,8 @@ export async function POST(
         roomId: room.id,
         tmdbMovieId: movie.tmdbId,
         position,
+        // MVP: TMDB discover doesn't return per-movie provider info.
+        // Store the first selected service as an approximation; watch URL goes to TMDB.
         streamingService: serviceIds[0],
         watchUrl: `https://www.themoviedb.org/movie/${movie.tmdbId}`,
       })),
