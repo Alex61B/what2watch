@@ -41,8 +41,10 @@ async function tmdbFetch<T>(url: string): Promise<T> {
   const cached = cache.get(url)
   if (cached && cached.expiresAt > Date.now()) return cached.data as T
 
-  const res = await fetch(url)
-  if (!res.ok) throw new Error(`TMDB fetch failed: ${res.status} ${url}`)
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${key}` },
+  })
+  if (!res.ok) throw new Error(`TMDB fetch failed: ${res.status}`)
   const data = await res.json()
   cache.set(url, { data, expiresAt: Date.now() + 60 * 60 * 1000 })
   return data as T
@@ -55,7 +57,6 @@ export function buildDiscoverUrl(serviceIds: ServiceId[], filters: DiscoverFilte
     .join('|')
 
   const params = new URLSearchParams({
-    api_key: process.env.TMDB_API_KEY ?? '',
     with_watch_providers: providerIds,
     watch_region: 'US',
     sort_by: 'popularity.desc',
@@ -70,7 +71,7 @@ export function buildDiscoverUrl(serviceIds: ServiceId[], filters: DiscoverFilte
 }
 
 export function buildMovieDetailUrl(tmdbId: string): string {
-  return `${TMDB_BASE}/movie/${tmdbId}?api_key=${process.env.TMDB_API_KEY ?? ''}`
+  return `${TMDB_BASE}/movie/${tmdbId}`
 }
 
 export function parseMovieResult(raw: Record<string, unknown>): TmdbMovie {
