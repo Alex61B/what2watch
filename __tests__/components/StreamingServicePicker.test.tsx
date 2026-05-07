@@ -1,16 +1,13 @@
-import React from 'react'
 import { render, screen, fireEvent } from '@testing-library/react'
 import StreamingServicePicker from '@/components/StreamingServicePicker'
+import { STREAMING_SERVICES } from '@/lib/tmdb'
 
 describe('StreamingServicePicker', () => {
   it('renders all 6 streaming services', () => {
     render(<StreamingServicePicker selected={[]} onChange={() => {}} />)
-    expect(screen.getByText('Netflix')).toBeInTheDocument()
-    expect(screen.getByText('Amazon Prime')).toBeInTheDocument()
-    expect(screen.getByText('Disney+')).toBeInTheDocument()
-    expect(screen.getByText('HBO Max')).toBeInTheDocument()
-    expect(screen.getByText('Hulu')).toBeInTheDocument()
-    expect(screen.getByText('Apple TV+')).toBeInTheDocument()
+    for (const service of STREAMING_SERVICES) {
+      expect(screen.getByText(service.name)).toBeInTheDocument()
+    }
   })
 
   it('calls onChange with the service added when an unselected service is clicked', () => {

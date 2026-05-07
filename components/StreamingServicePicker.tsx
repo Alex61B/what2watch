@@ -1,7 +1,4 @@
-import React from 'react'
-import { STREAMING_SERVICES } from '@/lib/tmdb'
-
-type ServiceId = typeof STREAMING_SERVICES[number]['id']
+import { STREAMING_SERVICES, ServiceId } from '@/lib/tmdb'
 
 const SERVICE_COLORS: Record<ServiceId, string> = {
   netflix: 'bg-red-600 text-white border-red-600',
@@ -13,15 +10,15 @@ const SERVICE_COLORS: Record<ServiceId, string> = {
 }
 
 interface StreamingServicePickerProps {
-  selected: string[]
-  onChange: (services: string[]) => void
+  selected: ServiceId[]
+  onChange: (services: ServiceId[]) => void
 }
 
 export default function StreamingServicePicker({
   selected,
   onChange,
 }: StreamingServicePickerProps) {
-  function handleToggle(id: string) {
+  function handleToggle(id: ServiceId) {
     if (selected.includes(id)) {
       onChange(selected.filter((s) => s !== id))
     } else {
@@ -37,12 +34,12 @@ export default function StreamingServicePicker({
           <button
             key={service.id}
             type="button"
-            aria-pressed={isSelected ? 'true' : 'false'}
+            aria-pressed={isSelected}
             onClick={() => handleToggle(service.id)}
             className={[
               'rounded-lg border-2 px-4 py-3 text-sm font-medium transition-colors',
               isSelected
-                ? SERVICE_COLORS[service.id as ServiceId]
+                ? SERVICE_COLORS[service.id]
                 : 'border-gray-300 bg-white text-gray-500 hover:border-gray-400 hover:text-gray-700',
             ].join(' ')}
           >
