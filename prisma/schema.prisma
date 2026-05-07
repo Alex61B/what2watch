@@ -20,7 +20,6 @@ model User {
 model Room {
   id                String     @id @default(uuid())
   code              String     @unique
-  hostMemberId      String
   streamingServices String[]
   filters           Json?
   status            RoomStatus @default(LOBBY)
@@ -48,9 +47,12 @@ model Member {
   isHost       Boolean  @default(false)
   joinedAt     DateTime @default(now())
   lastSeenAt   DateTime @default(now())
+  leftAt       DateTime?
   room         Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
   user         User?    @relation(fields: [userId], references: [id])
   votes        Vote[]
+
+  @@index([roomId])
 }
 
 model RoomQueue {
