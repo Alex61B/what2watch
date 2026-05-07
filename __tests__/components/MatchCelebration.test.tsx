@@ -4,7 +4,7 @@ import MatchCelebration from '@/components/MatchCelebration'
 
 jest.mock('next/image', () => ({
   __esModule: true,
-  default: (props: ImgHTMLAttributes<HTMLImageElement>) => <img {...props} />,
+  default: ({ fill, ...props }: ImgHTMLAttributes<HTMLImageElement> & { fill?: boolean }) => <img {...props} />,
 }))
 
 const baseMovie = {
