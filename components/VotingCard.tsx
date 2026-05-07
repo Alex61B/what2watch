@@ -3,17 +3,19 @@
 import Image from 'next/image'
 import { useRef } from 'react'
 
+interface Movie {
+  tmdbId: string
+  title: string
+  overview: string
+  posterUrl: string
+  year: number
+  rating: number
+  runtime: number | null
+  genreIds: number[]
+}
+
 interface VotingCardProps {
-  movie: {
-    tmdbId: string
-    title: string
-    overview: string
-    posterUrl: string
-    year: number
-    rating: number
-    runtime: number | null
-    genreIds: number[]
-  }
+  movie: Movie
   onVote: (vote: boolean) => void
 }
 
@@ -32,9 +34,6 @@ export default function VotingCard({ movie, onVote }: VotingCardProps) {
       onVote(delta > 0)
     }
   }
-
-  const runtimeText =
-    movie.runtime !== null ? ` · ${movie.runtime} min` : ''
 
   return (
     <div
@@ -64,7 +63,7 @@ export default function VotingCard({ movie, onVote }: VotingCardProps) {
         <h2 className="text-xl font-bold leading-tight">{movie.title}</h2>
 
         <div className="flex items-center gap-3 text-sm text-gray-500">
-          <span>{movie.year}{runtimeText}</span>
+          <span>{movie.year}{movie.runtime ? ` · ${movie.runtime} min` : ''}</span>
           <span className="text-yellow-500">★ {movie.rating}</span>
         </div>
 

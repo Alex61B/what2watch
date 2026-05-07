@@ -1,9 +1,10 @@
+import type { ImgHTMLAttributes } from 'react'
 import { render, screen, fireEvent } from '@testing-library/react'
 import VotingCard from '@/components/VotingCard'
 
 jest.mock('next/image', () => ({
   __esModule: true,
-  default: (props: any) => <img {...props} />,
+  default: (props: ImgHTMLAttributes<HTMLImageElement>) => <img {...props} />,
 }))
 
 const baseMovie = {
@@ -46,5 +47,16 @@ describe('VotingCard', () => {
   it('renders "min" when runtime is not null', () => {
     render(<VotingCard movie={{ ...baseMovie, runtime: 118 }} onVote={jest.fn()} />)
     expect(screen.getByText(/118 min/)).toBeInTheDocument()
+  })
+
+  it('does not render runtime text when runtime is null', () => {
+    render(<VotingCard movie={{ ...baseMovie, runtime: null }} onVote={jest.fn()} />)
+    expect(screen.queryByText(/min/)).toBeNull()
+    expect(screen.queryByText(/·/)).toBeNull()
+  })
+
+  it('renders fallback when posterUrl is empty string', () => {
+    render(<VotingCard movie={{ ...baseMovie, posterUrl: '' }} onVote={jest.fn()} />)
+    expect(screen.getByText('No Image')).toBeInTheDocument()
   })
 })
