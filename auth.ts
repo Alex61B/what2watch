@@ -6,7 +6,20 @@ import bcrypt from 'bcryptjs'
 import { prisma } from '@/lib/prisma'
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  adapter: PrismaAdapter(prisma),
+  adapter: (() => {
+    const base = PrismaAdapter(prisma)
+    return {
+      ...base,
+      createUser: async (data: { name?: string | null; email: string; emailVerified?: Date | null; image?: string | null }) => {
+        return prisma.user.create({
+          data: {
+            ...data,
+            displayName: (data.name ?? data.email ?? 'User').slice(0, 255),
+          },
+        })
+      },
+    }
+  })(),
   // JWT sessions — no Session table required; userId threaded via jwt/session callbacks
   session: { strategy: 'jwt' },
   pages: {

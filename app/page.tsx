@@ -1,12 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { isValidRoomCode } from "@/lib/room-code";
 import AuthStatus from "@/components/AuthStatus";
 
 export default function LandingPage() {
   const router = useRouter();
+  const { data: session } = useSession();
+
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    // Best-effort: link the current room member session to the NextAuth user
+    fetch("/api/auth/link-member", { method: "POST" }).catch(() => {});
+  }, [session?.user?.id]);
 
   // Create room state
   const [createName, setCreateName] = useState("");
