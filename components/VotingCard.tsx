@@ -56,11 +56,16 @@ export default function VotingCard({ movie, onVote }: VotingCardProps) {
             No Image
           </div>
         )}
+        {/* Title overlay */}
+        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-4 pb-3 pt-8">
+          <h2 className="text-lg font-bold leading-tight text-white drop-shadow">
+            {movie.title}
+          </h2>
+        </div>
       </div>
 
       {/* Info */}
       <div className="flex flex-1 flex-col gap-2 p-4">
-        <h2 className="text-xl font-bold leading-tight">{movie.title}</h2>
 
         <div className="flex items-center gap-3 text-sm text-gray-500">
           <span>{movie.year}{movie.runtime ? ` · ${movie.runtime} min` : ''}</span>
