@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { signIn } from 'next-auth/react'
+import { useState, useEffect } from 'react'
+import { signIn, useSession } from 'next-auth/react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 
@@ -15,6 +15,14 @@ export default function SignInPage() {
   const [loading, setLoading] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const { status } = useSession()
+
+  useEffect(() => {
+    if (status === 'authenticated') {
+      router.replace(callbackUrl)
+    }
+  }, [status, callbackUrl, router])
 
   async function linkMember() {
     try {
@@ -53,7 +61,7 @@ export default function SignInPage() {
   async function handleGoogleSignIn() {
     setGoogleLoading(true)
     try {
-      await signIn('google')
+      await signIn('google', { callbackUrl })
     } catch {
       setGoogleLoading(false)
       setError('Something went wrong. Please try again.')
