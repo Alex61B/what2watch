@@ -20,6 +20,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       },
     }
   })(),
+  trustHost: true,
   // JWT sessions — no Session table required; userId threaded via jwt/session callbacks
   session: { strategy: 'jwt' },
   pages: {
