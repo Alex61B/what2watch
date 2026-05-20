@@ -9,6 +9,7 @@ interface RoomFilters {
   genres?: number[];
   maxRuntime?: number;
   minRating?: number;
+  maxRating?: number;
 }
 
 interface RoomMember {
@@ -37,6 +38,7 @@ export default function SetupPage() {
   // Local copies of mutable fields
   const [services, setServices] = useState<ServiceId[]>([]);
   const [minRating, setMinRating] = useState<number | "">(0);
+  const [maxRating, setMaxRating] = useState<number | "">(10);
   const [maxRuntime, setMaxRuntime] = useState<number | "">("");
   const [selectedGenres, setSelectedGenres] = useState<number[]>([]);
   const [watchedFilter, setWatchedFilter] = useState(false);
@@ -105,6 +107,7 @@ export default function SetupPage() {
               if (prefs.savedFilters) {
                 const f = prefs.savedFilters as RoomFilters
                 setMinRating(f.minRating ?? 0)
+                setMaxRating(f.maxRating ?? 10)
                 setMaxRuntime(f.maxRuntime ?? '')
                 setSelectedGenres(f.genres ?? [])
                 // Also PATCH the room filters
@@ -144,6 +147,7 @@ export default function SetupPage() {
     async (partial: Partial<RoomFilters>) => {
       const current: RoomFilters = {
         minRating: minRating === "" ? undefined : Number(minRating),
+        maxRating: (maxRating === "" || Number(maxRating) >= 10) ? undefined : Number(maxRating),
         maxRuntime: maxRuntime === "" ? undefined : Number(maxRuntime),
         genres: selectedGenres.length ? selectedGenres : undefined,
       };
@@ -154,7 +158,7 @@ export default function SetupPage() {
         body: JSON.stringify({ filters: merged }),
       });
     },
-    [code, minRating, maxRuntime, selectedGenres]
+    [code, minRating, maxRating, maxRuntime, selectedGenres]
   );
 
   // Patch watchedFilter (top-level boolean, separate from filters JSON)
@@ -187,6 +191,12 @@ export default function SetupPage() {
     const val = parseFloat(e.target.value);
     setMinRating(val);
     patchFilters({ minRating: val });
+  }
+
+  function handleMaxRatingChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const val = parseFloat(e.target.value);
+    setMaxRating(val);
+    patchFilters({ maxRating: val >= 10 ? undefined : val });
   }
 
   function handleMaxRuntimeChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -276,30 +286,45 @@ export default function SetupPage() {
         <section className="bg-gray-900 rounded-2xl p-6 space-y-5">
           <h2 className="text-lg font-semibold">Filters (optional)</h2>
 
-          {/* Min rating */}
-          <div className="space-y-2">
-            <label
-              htmlFor="minRating"
-              className="block text-sm font-medium text-gray-300"
-            >
-              Minimum rating:{" "}
+          {/* Rating range */}
+          <div className="space-y-3">
+            <label className="block text-sm font-medium text-gray-300">
+              Rating range:{" "}
               <span className="font-semibold text-white">
                 {minRating === "" ? "0" : minRating}
+                {" – "}
+                {maxRating === "" || Number(maxRating) >= 10 ? "Any" : maxRating}
               </span>
             </label>
-            <input
-              id="minRating"
-              type="range"
-              min={0}
-              max={9}
-              step={0.5}
-              value={minRating === "" ? 0 : minRating}
-              onChange={handleMinRatingChange}
-              className="w-full accent-indigo-500"
-            />
+            <div className="space-y-1">
+              <span className="text-xs text-gray-500">Min</span>
+              <input
+                id="minRating"
+                type="range"
+                min={0}
+                max={maxRating === "" ? 10 : Number(maxRating)}
+                step={0.5}
+                value={minRating === "" ? 0 : minRating}
+                onChange={handleMinRatingChange}
+                className="w-full accent-indigo-500"
+              />
+            </div>
+            <div className="space-y-1">
+              <span className="text-xs text-gray-500">Max</span>
+              <input
+                id="maxRating"
+                type="range"
+                min={minRating === "" ? 0 : Number(minRating)}
+                max={10}
+                step={0.5}
+                value={maxRating === "" ? 10 : maxRating}
+                onChange={handleMaxRatingChange}
+                className="w-full accent-indigo-500"
+              />
+            </div>
             <div className="flex justify-between text-xs text-gray-500">
               <span>0</span>
-              <span>9</span>
+              <span>10 (Any)</span>
             </div>
           </div>
 

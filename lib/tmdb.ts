@@ -44,6 +44,7 @@ export interface DiscoverFilters {
   genres?: number[]
   maxRuntime?: number
   minRating?: number
+  maxRating?: number
 }
 
 // In-memory cache with 1-hour TTL
@@ -83,6 +84,7 @@ export function buildDiscoverUrl(serviceIds: ServiceId[], filters: DiscoverFilte
   if (filters.genres?.length) params.set('with_genres', filters.genres.join(','))
   if (filters.maxRuntime) params.set('with_runtime.lte', String(filters.maxRuntime))
   if (filters.minRating) params.set('vote_average.gte', String(filters.minRating))
+  if (filters.maxRating) params.set('vote_average.lte', String(filters.maxRating))
 
   return `${TMDB_BASE}/discover/movie?${params}`
 }
