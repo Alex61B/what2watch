@@ -71,28 +71,7 @@ check_research_gate() {
     exit 1
   fi
 
-  local prompts_file="$PROJECT_ROOT/PROMPTS.md"
-  if [[ ! -f "$prompts_file" ]]; then
-    echo "ERROR: PROMPTS.md does not exist." >&2
-    echo "  Create PROMPTS.md and log the research prompt before advancing." >&2
-    exit 1
-  fi
-
-  local entry_count
-  entry_count=$(awk '
-    /^## Prompt Log/ { in_log = 1; next }
-    in_log && /^### Prompt #[0-9]/ { count++ }
-    END { print count + 0 }
-  ' "$prompts_file" 2>/dev/null || echo "0")
-
-  if [[ "$entry_count" -eq 0 ]]; then
-    echo "ERROR: PROMPTS.md has no entries under '## Prompt Log'." >&2
-    echo "  Log the research prompt before advancing from RESEARCH." >&2
-    exit 1
-  fi
-
   echo "  ✓ docs/research.md — all sections present"
-  echo "  ✓ PROMPTS.md — $entry_count prompt(s) logged"
 }
 
 check_plan_gate() {

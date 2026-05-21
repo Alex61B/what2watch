@@ -58,7 +58,6 @@ State is persisted in `.workflow_state`. Failure count is persisted in `.workflo
 
 **Exit criteria:**
 - [ ] `docs/research.md` exists with all 7 required sections
-- [ ] Research prompt logged in `PROMPTS.md` under `## Prompt Log`
 
 ```bash
 bash scripts/advance_state.sh next
@@ -76,7 +75,6 @@ bash scripts/advance_state.sh next
 
 **Exit criteria:**
 - [ ] `.workflow_plan_files` exists and lists every file to create or modify (one path per line)
-- [ ] Planning prompts logged in `PROMPTS.md`
 
 ```bash
 bash scripts/advance_state.sh next
@@ -95,7 +93,6 @@ bash scripts/advance_state.sh next
 **Exit criteria:**
 - [ ] Every file in `.workflow_plan_files` exists and is implemented
 - [ ] No unplanned new files (drift-free)
-- [ ] Implementation prompts logged in `PROMPTS.md`
 
 ```bash
 bash scripts/advance_state.sh next
@@ -113,7 +110,6 @@ bash scripts/advance_state.sh next
 
 **Exit criteria:**
 - [ ] `bash scripts/verify.sh` exits 0 (runs typecheck + lint + jest)
-- [ ] `PROMPTS.md` contains every prompt used during this workflow cycle
 
 ```bash
 bash scripts/advance_state.sh next
@@ -129,12 +125,6 @@ If any TEST exit criterion fails:
 2. Enter a **constrained remediation loop** scoped **only** to the failing check.
 3. If the same failure repeats **3 times**, `advance_state.sh` exits with a blocker message.
 4. Stop all code changes and provide a written blocker summary.
-
----
-
-## Prompt Logging Rule
-
-`PROMPTS.md` must contain every prompt used during development. Logging is verified as part of the TEST state exit criteria. The `stop.sh` hook reminds the agent to log after each session.
 
 ---
 

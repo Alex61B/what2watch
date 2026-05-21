@@ -1,40 +1,43 @@
-# Research: Fix prisma migrate deploy — WASM schema engine name type error
+# Research: Dual-Handle Rating Range Slider
 
 ## Requirements Summary
 
-`prisma migrate deploy` fails on Render with `Error: Column type 'name' could not be deserialized from the database` in `schema_engine_wasm`. Migrations need to run against the production database without using the WASM schema engine.
+Replace the two stacked `<input type="range">` sliders in the room setup filter panel with a single-track dual-handle slider. Two bugs to fix:
+1. The min slider's `max` prop is set to `maxRating` and the max slider's `min` prop is set to `minRating` — dragging max leftward forces min to move too (coupled state).
+2. Once both handles reach the same position, only the top-z-index slider is reachable.
+
+Implementation: CSS overlay approach — two absolutely-positioned inputs on one track, `pointer-events: none` on the slider element, `pointer-events: all` on the `::webkit-slider-thumb` pseudo-element only. Last-touched handle gets `z-index: 5` via React `onPointerDown` state.
 
 ## Stack Choices
 
-- Prisma 6.19.3 with `engine: "js"` in `prisma.config.ts` (WASM, no native binary)
-- `pg` v8 already a production dependency — can be used for direct SQL execution
-- Node.js scripts in `scripts/` are CommonJS (`package.json` has no `"type": "module"`)
+- Next.js 15 / React 19, TypeScript, Tailwind CSS
+- No new packages — change is pure CSS + React state
+- CSS class added to `app/globals.css` (already imported globally)
+- `accent-indigo-500` replaced by custom thumb style in the `.dual-thumb` CSS rule
 
 ## Environment Verification
 
-- `DATABASE_URL` is set in Render environment variables ✓
-- `pg` is in `dependencies` (not devDependencies) — available at build time ✓
-- `prisma.config.ts` forces WASM engine for ALL Prisma CLI commands including `migrate deploy`
-- WASM schema engine cannot deserialize PostgreSQL's internal `name` type from system catalogs
-- Native binary engine not viable on Render (OpenSSL issue, see git commits 3beacb7 and 74cc409)
+- `app/globals.css` is the global stylesheet (3 lines, Tailwind directives only) — safe to append
+- `app/room/[code]/setup/page.tsx` contains the filter UI and both rating state variables
+- Both state variables (`minRating`, `maxRating`) are typed `number | ""` — handlers must guard against `""` when clamping
 
 ## Risks & Edge Cases
 
-- Custom migration runner must use the exact `_prisma_migrations` schema Prisma expects, so `prisma studio` and other Prisma tools still work correctly.
-- Each migration runs in a transaction; if it fails, it rolls back and the build fails — no partial state.
-- Script is idempotent: already-applied migrations are skipped.
-- `crypto.randomUUID()` requires Node.js 15.6+ — Render uses Node.js 18+ ✓
+- `Number("") === 0` — if either state value is `""`, naive clamping would clamp to 0; handlers explicitly guard this
+- Thumb overlap when min === max: z-index is set via `onPointerDown`, last-touched always wins; edge case at 0 and 10 defaults to max-on-top and min-on-top respectively
+- Firefox uses `::-moz-range-thumb` — both vendor prefixes included in CSS
 
 ## Assumptions & Open Questions
 
-- All 4 existing migrations will apply cleanly to the production database.
-- No open questions.
+- No other page references the rating range sliders; change is isolated to `setup/page.tsx`
+- No open questions
 
 ## Out of Scope
 
-- Upgrading Prisma or switching from the JS engine.
-- Zero-downtime migrations.
+- Touch event handling beyond what the native `<input type="range">` provides
+- Changing the 0–10 scale or the 0.5 step
+- Any other filter UI changes
 
 ## Readiness Verdict: READY FOR PLANNING
 
-Root cause confirmed. Fix is a new `scripts/migrate-deploy.js` script + one-line change to the `package.json` build script.
+Two files to change: `app/globals.css` (new CSS class) and `app/room/[code]/setup/page.tsx` (state, handlers, JSX).

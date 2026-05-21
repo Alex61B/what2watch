@@ -39,6 +39,7 @@ export default function SetupPage() {
   const [services, setServices] = useState<ServiceId[]>([]);
   const [minRating, setMinRating] = useState<number | "">(0);
   const [maxRating, setMaxRating] = useState<number | "">(10);
+  const [activeThumb, setActiveThumb] = useState<'min' | 'max'>('max');
   const [maxRuntime, setMaxRuntime] = useState<number | "">("");
   const [selectedGenres, setSelectedGenres] = useState<number[]>([]);
   const [watchedFilter, setWatchedFilter] = useState(false);
@@ -189,14 +190,18 @@ export default function SetupPage() {
 
   function handleMinRatingChange(e: React.ChangeEvent<HTMLInputElement>) {
     const val = parseFloat(e.target.value);
-    setMinRating(val);
-    patchFilters({ minRating: val });
+    const currentMax = maxRating === "" ? 10 : Number(maxRating);
+    const clamped = Math.min(val, currentMax);
+    setMinRating(clamped);
+    patchFilters({ minRating: clamped });
   }
 
   function handleMaxRatingChange(e: React.ChangeEvent<HTMLInputElement>) {
     const val = parseFloat(e.target.value);
-    setMaxRating(val);
-    patchFilters({ maxRating: val >= 10 ? undefined : val });
+    const currentMin = minRating === "" ? 0 : Number(minRating);
+    const clamped = Math.max(val, currentMin);
+    setMaxRating(clamped);
+    patchFilters({ maxRating: clamped >= 10 ? undefined : clamped });
   }
 
   function handleMaxRuntimeChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -286,45 +291,53 @@ export default function SetupPage() {
         <section className="bg-gray-900 rounded-2xl p-6 space-y-5">
           <h2 className="text-lg font-semibold">Filters (optional)</h2>
 
-          {/* Rating range */}
-          <div className="space-y-3">
+          {/* Rating range — dual-handle slider */}
+          <div className="space-y-2">
             <label className="block text-sm font-medium text-gray-300">
               Rating range:{" "}
               <span className="font-semibold text-white">
                 {minRating === "" ? "0" : minRating}
                 {" – "}
-                {maxRating === "" || Number(maxRating) >= 10 ? "Any" : maxRating}
+                {maxRating === "" ? 10 : maxRating}
               </span>
             </label>
-            <div className="space-y-1">
-              <span className="text-xs text-gray-500">Min</span>
+            <div className="relative mx-1" style={{ height: 20 }}>
+              <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1 rounded-full bg-gray-700" />
+              <div
+                className="absolute top-1/2 -translate-y-1/2 h-1 rounded-full bg-indigo-500"
+                style={{
+                  left: `${(Number(minRating) / 10) * 100}%`,
+                  right: `${((10 - Number(maxRating === "" ? 10 : maxRating)) / 10) * 100}%`,
+                }}
+              />
               <input
-                id="minRating"
                 type="range"
                 min={0}
-                max={maxRating === "" ? 10 : Number(maxRating)}
-                step={0.5}
-                value={minRating === "" ? 0 : minRating}
-                onChange={handleMinRatingChange}
-                className="w-full accent-indigo-500"
-              />
-            </div>
-            <div className="space-y-1">
-              <span className="text-xs text-gray-500">Max</span>
-              <input
-                id="maxRating"
-                type="range"
-                min={minRating === "" ? 0 : Number(minRating)}
                 max={10}
                 step={0.5}
-                value={maxRating === "" ? 10 : maxRating}
+                value={minRating === "" ? 0 : Number(minRating)}
+                onPointerDown={() => setActiveThumb('min')}
+                onChange={handleMinRatingChange}
+                className="dual-thumb absolute w-full h-full"
+                style={{ zIndex: activeThumb === 'min' ? 5 : 4 }}
+                aria-label="Minimum rating"
+              />
+              <input
+                type="range"
+                min={0}
+                max={10}
+                step={0.5}
+                value={maxRating === "" ? 10 : Number(maxRating)}
+                onPointerDown={() => setActiveThumb('max')}
                 onChange={handleMaxRatingChange}
-                className="w-full accent-indigo-500"
+                className="dual-thumb absolute w-full h-full"
+                style={{ zIndex: activeThumb === 'max' ? 5 : 4 }}
+                aria-label="Maximum rating"
               />
             </div>
             <div className="flex justify-between text-xs text-gray-500">
               <span>0</span>
-              <span>10 (Any)</span>
+              <span>10</span>
             </div>
           </div>
 

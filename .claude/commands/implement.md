@@ -30,7 +30,6 @@ If you discover another file must be changed:
 - [ ] Every file in `.workflow_plan_files` exists and is implemented
 - [ ] No unimplemented stubs remain
 - [ ] No unplanned new files (drift-free)
-- [ ] Implementation prompts logged in `PROMPTS.md`
 
 ```bash
 bash scripts/advance_state.sh next

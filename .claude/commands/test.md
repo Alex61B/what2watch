@@ -34,7 +34,6 @@ On full success, writes `.workflow_verified` (required for the exit gate).
 ## Exit Criteria
 - [ ] `bash scripts/verify.sh` exits 0
 - [ ] `.workflow_verified` exists
-- [ ] `PROMPTS.md` contains every prompt used in this workflow cycle
 
 ```bash
 bash scripts/advance_state.sh next

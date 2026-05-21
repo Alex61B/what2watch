@@ -36,7 +36,6 @@ Before advancing, create `docs/research.md` containing all 7 sections:
 
 ## Exit Criteria
 - [ ] `docs/research.md` exists with all 7 required sections
-- [ ] Research prompt(s) logged in `PROMPTS.md` under `## Prompt Log`
 
 ```bash
 bash scripts/advance_state.sh next

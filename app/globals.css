@@ -1,3 +1,33 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Dual-handle range slider: block track events, allow only thumb events */
+.dual-thumb {
+  pointer-events: none;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  margin: 0;
+  padding: 0;
+}
+.dual-thumb::-webkit-slider-thumb {
+  pointer-events: all;
+  cursor: pointer;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+}
+.dual-thumb::-moz-range-thumb {
+  pointer-events: all;
+  cursor: pointer;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #6366f1;
+  border: none;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+}

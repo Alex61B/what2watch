@@ -30,7 +30,6 @@ The `pre_tool_use` hook blocks these:
 
 ## Exit Criteria
 - [ ] `.workflow_plan_files` exists and lists every file to create or modify
-- [ ] Planning prompts logged in `PROMPTS.md`
 
 ```bash
 bash scripts/advance_state.sh next

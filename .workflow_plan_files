@@ -1,2 +1,2 @@
-package.json
-scripts/migrate-deploy.js
+app/globals.css
+app/room/[code]/setup/page.tsx
