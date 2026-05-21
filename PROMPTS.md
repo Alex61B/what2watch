@@ -26,6 +26,17 @@ Each entry must include:
 
 <!-- Entries go below this line, starting at #1 -->
 
+### Prompt #3 — RESEARCH State
+**Date**: 2026-05-21
+**Tool**: Claude Code
+**State**: RESEARCH
+**Prompt**:
+> Render build log showing: Error: Column type 'name' could not be deserialized from the database. schema_engine_wasm::wasm::engine::ApplyMigrations. Build failed.
+
+**Output Summary**: Identified that prisma.config.ts sets engine:"js" which forces the WASM schema engine for ALL Prisma CLI commands including migrate deploy. The WASM schema engine cannot handle PostgreSQL's internal `name` type found in system catalog queries during initialization. Fix is a custom Node.js migration runner using the pg library directly, bypassing the WASM schema engine entirely.
+**Files Changed**: none
+**Verification**: not applicable
+
 ### Prompt #2 — RESEARCH State
 **Date**: 2026-05-21
 **Tool**: Claude Code
