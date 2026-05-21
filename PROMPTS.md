@@ -26,6 +26,17 @@ Each entry must include:
 
 <!-- Entries go below this line, starting at #1 -->
 
+### Prompt #2 — RESEARCH State
+**Date**: 2026-05-21
+**Tool**: Claude Code
+**State**: RESEARCH
+**Prompt**:
+> Prisma error P2022 "The column (not available) does not exist in the current database" from prisma.room.findUnique(). Should I update build command to add npx prisma generate?
+
+**Output Summary**: Identified that 4 migrations exist locally but none deployed to Render. The build script runs `prisma generate` (client codegen only) but never `prisma migrate deploy`. Fix is adding `prisma migrate deploy` to the package.json build script. Adding `npx prisma generate` to Render's build command would be redundant and would not fix the issue.
+**Files Changed**: none
+**Verification**: not applicable
+
 ### Prompt #1 — RESEARCH State
 **Date**: 2026-05-21
 **Tool**: Claude Code

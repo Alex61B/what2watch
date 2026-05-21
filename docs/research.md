@@ -1,44 +1,38 @@
-# Research: Fix ClientFetchError on /api/auth/session in Production
+# Research: Fix Prisma P2022 — Missing Columns in Production
 
 ## Requirements Summary
 
-Fix `ClientFetchError: Failed to fetch` thrown by `SessionProvider` when fetching `/api/auth/session` on the Render deployment. The error occurs on every page load; the app is otherwise deployed correctly.
+Fix `P2022: The column (not available) does not exist in the current database` thrown by `prisma.room.findUnique()` on the Render deployment. The production database is missing columns/tables added by recent migrations because `prisma migrate deploy` has never run against it.
 
 ## Stack Choices
 
-- Next.js 15.5.16 (App Router)
-- next-auth 5.0.0-beta.31 (Auth.js v5)
-- @auth/prisma-adapter 2.11.2
-- Deployed on Render
+- Prisma 6.19.3 with pg driver adapter (JS engine, no native binary)
+- PostgreSQL on Render (internal network URL)
+- 4 migrations in `prisma/migrations/`, none deployed to production
 
 ## Environment Verification
 
-All environment variables on Render are correctly set:
-- `AUTH_SECRET` — confirmed present and matches `.env.local`
-- `AUTH_URL=https://what2watch-tmwt.onrender.com` — correct production URL
-- `DATABASE_URL` — internal Render Postgres URL
-- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — confirmed present
-- `PORT=10000` — Next.js reads this automatically
-
-Code is correct: route handler at `app/api/auth/[...nextauth]/route.ts` exports `{ GET, POST }`, `trustHost: true` is set, JWT session strategy is used, no middleware, `SessionProvider` is wired via a `'use client'` wrapper.
+- `DATABASE_URL` is set in Render environment variables ✓
+- `prisma` CLI is in `dependencies` (not devDependencies) so it's available at build time ✓
+- Build script is `prisma generate && next build` — missing `prisma migrate deploy`
 
 ## Risks & Edge Cases
 
-- The fix (lazy config pattern) is a supported NextAuth v5 pattern; no API surface changes.
-- The `signIn`, `signOut`, `auth`, and `handlers` exports remain identical.
-- No other callers of `auth.ts` need changes.
+- `prisma migrate deploy` is idempotent and safe: applies only unapplied migrations in order, never drops or resets data.
+- Running migrations during build (before `next build`) means the DB is updated before new code goes live — correct order for additive changes.
+- If a migration has a destructive change (drop column, rename) in the future, a separate deployment strategy would be needed. Not applicable here.
 
 ## Assumptions & Open Questions
 
-- Assumes NextAuth v5 beta.31's lazy-config code path correctly awaits `headers()`. Verified by reading the internal source: the lazy path uses `await headers()` while the static path uses `Promise.resolve(headers())`.
+- All 4 migrations are safe to apply together (they are: additive schema changes).
 - No open questions.
 
 ## Out of Scope
 
-- Upgrading next-auth to a newer version (deferred; the lazy-config workaround fixes the bug without a dependency change).
-- Google OAuth callback URL configuration in Google Cloud Console.
-- Database migrations.
+- Zero-downtime migration strategies.
+- Rolling deployments.
+- Database backups prior to migration (handled by Render's managed Postgres).
 
 ## Readiness Verdict: READY FOR PLANNING
 
-Root cause identified. Fix is a two-character change to `auth.ts` (wrap static config object in an arrow function).
+Root cause confirmed. Fix is adding `prisma migrate deploy` to the build script in `package.json`.
