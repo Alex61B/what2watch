@@ -40,3 +40,8 @@ yarn-error.log*
 next-env.d.ts
 
 /app/generated/prisma
+
+# Backpressure workflow — ephemeral state files
+.workflow_verified
+.workflow_drift
+.workflow_activity

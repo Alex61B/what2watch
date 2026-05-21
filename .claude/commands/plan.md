@@ -1,43 +1,37 @@
-# PLAN State
+# /plan — PLAN State Command
 
-You are now in PLAN mode. Your only job is to understand the task and inspect the codebase. You must not change anything.
+You are now in the **PLAN** workflow state. Read `AGENTS.md` for the authoritative rules.
 
-## What you may do without asking
+## Purpose
+Produce a concrete, complete implementation checklist. Define what will be built and write
+the file manifest. No application code written yet.
 
-- Read any file
-- Search code: `grep`, `rg`, `find`, `tree`, `cat`, `head`, `tail`, `sed`, `wc`
-- Run: `pwd`, `ls`, `git status`, `git diff`, `git diff --stat`, `git log --oneline`
+## Current State Check
+```bash
+cat .workflow_state   # must print: PLAN
+```
 
-## What requires justification before running
+## Allowed Actions
+- Define schema changes, API routes, component structure, and acceptance criteria
+- Write `.workflow_plan_files` (one planned file path per line — required)
+- Write or update `AGENTS.md`, `PROMPTS.md`, `docs/`, `.claude/`, `scripts/`, `*.md`
 
-- `npm run lint`
-- `npm run typecheck`
-- `npm test` / `npm run test`
-- `npm run build`
+## Forbidden Actions
+The `pre_tool_use` hook blocks these:
+- Writing application code to `app/`, `lib/`, `components/`, `types/`, `prisma/`, `__tests__/`
+- Running `npm install/add`, `npx prisma migrate`, shell redirects to tracked dirs
 
-## What you must not do
+## Required Outputs
+1. **`.workflow_plan_files`** — every file to be created or modified, one path per line
+2. **Schema changes** — any Prisma model additions or modifications
+3. **API changes** — method, path, behavior
+4. **Component changes** — what UI changes are needed
+5. **Acceptance criteria** — one testable criterion per core feature
 
-- Edit, create, delete, or move files
-- Install or change packages or dependencies
-- Run migrations or write to databases
-- Edit `.env*`, secrets, auth, billing, deployment, or production config
-- Start dev servers or long-running watch commands
-- `git add`, `git commit`, `git reset`, `git checkout`
-- Call any external API with a write operation
+## Exit Criteria
+- [ ] `.workflow_plan_files` exists and lists every file to create or modify
+- [ ] Planning prompts logged in `PROMPTS.md`
 
-## Required output before leaving PLAN
-
-When you have finished inspecting, produce this structured output:
-
-1. **Task understanding** — what the task is asking in your own words
-2. **Files inspected** — list every file you read
-3. **Proposed approach** — how you intend to implement the task
-4. **Files to change** — exact file paths that will be modified or created
-5. **Risks and edge cases** — anything that could go wrong or requires care
-6. **Verification plan** — which commands you will run in VERIFY
-
-End with the explicit statement:
-
-> **PLAN complete. No files were modified.**
-
-Do not enter IMPLEMENT until the human has reviewed and approved the plan.
+```bash
+bash scripts/advance_state.sh next
+```

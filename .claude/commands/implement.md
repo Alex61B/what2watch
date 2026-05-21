@@ -1,36 +1,37 @@
-# IMPLEMENT State
+# /implement — IMPLEMENT State Command
 
-You are now in IMPLEMENT mode. Make scoped code changes based on the approved plan. Do not change anything outside that plan.
+You are now in the **IMPLEMENT** workflow state. Read `AGENTS.md` for the authoritative rules.
 
-## What you may do
+## Purpose
+Build the application exactly as planned. Every file you create or modify must appear
+in `.workflow_plan_files`. No scope creep, no unplanned refactors, no new features.
 
-- Edit files listed in the approved plan
-- Create small helper files if they were included in the plan
-- Make focused, reversible changes
-- Preserve existing architecture unless the task explicitly asks for an architectural change
+## Current State Check
+```bash
+cat .workflow_state        # must print: IMPLEMENT
+cat .workflow_plan_files   # review the planned file list
+```
 
-## What you must not do
+## Allowed Actions
+- Create or edit any file listed in `.workflow_plan_files`
+- Run read-only commands (grep, git, ls, cat)
 
-- Edit files not listed in the approved plan (explain scope expansion first)
-- Broad rewrites or unrelated refactors
-- Change package/dependency files unless explicitly approved
-- Edit `.env*`, secrets, auth, billing, deployment, or production config
-- Git commits
-- Database migrations unless explicitly approved
-- Silently expand scope
+## Forbidden Actions
+The `pre_tool_use` hook blocks `Write`/`Edit` to unplanned application files.
+The `post_tool_use` hook detects and flags any new unplanned files after each Bash call.
 
-## Scope expansion rule
-
+## Scope Expansion Rule
 If you discover another file must be changed:
 1. Stop before editing it
 2. Explain why it is needed
-3. Wait for approval
+3. Add it to `.workflow_plan_files` and wait for approval
 
-## Required output after IMPLEMENT
+## Exit Criteria
+- [ ] Every file in `.workflow_plan_files` exists and is implemented
+- [ ] No unimplemented stubs remain
+- [ ] No unplanned new files (drift-free)
+- [ ] Implementation prompts logged in `PROMPTS.md`
 
-1. **Files changed** — exact paths
-2. **What changed** — per file, what was modified
-3. **Why** — per file, why the change was necessary
-4. **Scope expansions** — any files added beyond the original plan, with justification
-
-Next state: VERIFY
+```bash
+bash scripts/advance_state.sh next
+```

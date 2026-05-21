@@ -2,8 +2,8 @@
   "permissions": {
     "allow": [
       "Agent(*)",
-      "Bash(*)",
       "Bash(pwd)",
+      "Bash(pwd *)",
       "Bash(ls)",
       "Bash(ls *)",
       "Bash(ls -la *)",
@@ -33,38 +33,39 @@
       "Bash(npm run lint *)",
       "Bash(npm run typecheck)",
       "Bash(npm run typecheck *)",
-      "Bash(npm run verify)",
-      "Bash(npm run verify *)",
-      "Bash(psql *)",
+      "Bash(bash scripts/*)",
+      "Bash(bash scripts/* *)",
+      "Bash(bash .claude/hooks/*)",
+      "Bash(mkdir *)",
+      "Bash(chmod *)",
+      "Bash(rm *)",
+      "Bash(echo *)",
+      "Bash(cp *)",
+      "Bash(mv *)",
       "Write(*)",
-      "Edit(*)",
-      "ReplaceStringInFile(*)",
-      "CreateFile(*)",
-      "DeleteFile(*)",
-      "CreateDirectory(*)"
+      "Edit(*)"
     ],
     "deny": []
   },
   "hooks": {
-    "SessionStart": [
+    "PreToolUse": [
       {
+        "matcher": "Bash|Write|Edit",
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/session-start.sh",
-            "statusMessage": "Initializing phase protocol..."
+            "command": "bash .claude/hooks/pre_tool_use.sh"
           }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Bash|Write|Edit",
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/post-edit.sh",
-            "async": true
+            "command": "bash .claude/hooks/post_tool_use.sh"
           }
         ]
       }
@@ -74,7 +75,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/stop-summary.sh"
+            "command": "bash .claude/hooks/stop.sh"
           }
         ]
       }
