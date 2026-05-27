@@ -1,2 +1,2 @@
-app/globals.css
-app/room/[code]/setup/page.tsx
+prisma.config.ts
+package.json

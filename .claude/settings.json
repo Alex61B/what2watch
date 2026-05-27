@@ -43,7 +43,17 @@
       "Bash(cp *)",
       "Bash(mv *)",
       "Write(*)",
-      "Edit(*)"
+      "Edit(*)",
+      "Bash(npx prisma generate*)",
+      "Bash(npx prisma validate*)",
+      "Bash(npx prisma format*)",
+      "Bash(npx prisma migrate status*)"
+    ],
+    "ask": [
+      "Bash(npx prisma migrate deploy*)",
+      "Bash(npx prisma migrate dev*)",
+      "Bash(npx prisma db push*)",
+      "Bash(npx prisma migrate reset*)"
     ],
     "deny": []
   },

@@ -14,9 +14,8 @@ export default defineConfig({
   migrations: {
     path: "prisma/migrations",
   },
-  engine: "js",
   async adapter() {
-    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const pool = new Pool({ connectionString: process.env.DIRECT_URL ?? process.env.DATABASE_URL });
     return new PrismaPg(pool);
   },
 });

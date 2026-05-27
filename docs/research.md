@@ -1,43 +1,46 @@
-# Research: Dual-Handle Rating Range Slider
+# Research: Prisma Migration Approval Gates
 
 ## Requirements Summary
 
-Replace the two stacked `<input type="range">` sliders in the room setup filter panel with a single-track dual-handle slider. Two bugs to fix:
-1. The min slider's `max` prop is set to `maxRating` and the max slider's `min` prop is set to `minRating` — dragging max leftward forces min to move too (coupled state).
-2. Once both handles reach the same position, only the top-z-index slider is reachable.
+Add `directUrl` to the Prisma datasource block to support Supabase's connection architecture. Supabase provides two PostgreSQL endpoints:
+1. **Pooled connection** (`DATABASE_URL`): goes through PgBouncer; mandatory for serverless (Vercel) to avoid connection exhaustion; does NOT support Prisma migrations or schema introspection.
+2. **Direct connection** (`DIRECT_URL`): bypasses PgBouncer; required for `prisma migrate deploy`, `prisma db push`, and `prisma db pull`.
 
-Implementation: CSS overlay approach — two absolutely-positioned inputs on one track, `pointer-events: none` on the slider element, `pointer-events: all` on the `::webkit-slider-thumb` pseudo-element only. Last-touched handle gets `z-index: 5` via React `onPointerDown` state.
+Without `directUrl`, running any Prisma migration command against Supabase fails with a connection error because PgBouncer does not support the extended wire protocol used by Prisma's migration engine.
 
 ## Stack Choices
 
-- Next.js 15 / React 19, TypeScript, Tailwind CSS
-- No new packages — change is pure CSS + React state
-- CSS class added to `app/globals.css` (already imported globally)
-- `accent-indigo-500` replaced by custom thumb style in the `.dual-thumb` CSS rule
+- **Prisma `directUrl` field** (added in Prisma 5.x): lets the schema declare two connection strings — one for the ORM at runtime, one for the migrate engine. Zero runtime overhead; only the migration engine uses `DIRECT_URL`.
+- **No alternative**: there is no safe way to run migrations against Supabase without a direct (non-pooled) connection. Prisma's `datasource.directUrl` is the official solution.
+- **Environment variable `DIRECT_URL`**: must be set in `.env.local` (dev) and in Vercel's environment dashboard (production). Supabase dashboard → Settings → Database → Connection string → "Direct connection".
 
 ## Environment Verification
 
-- `app/globals.css` is the global stylesheet (3 lines, Tailwind directives only) — safe to append
-- `app/room/[code]/setup/page.tsx` contains the filter UI and both rating state variables
-- Both state variables (`minRating`, `maxRating`) are typed `number | ""` — handlers must guard against `""` when clamping
+- Prisma version in `package.json`: 6.x — `directUrl` is supported.
+- `prisma/schema.prisma` datasource block currently only has `url = env("DATABASE_URL")`.
+- `.env.local` has `DATABASE_URL`; `DIRECT_URL` must be added manually after migration to Supabase.
+- One-line change: add `directUrl = env("DIRECT_URL")` inside the datasource block.
+- `scripts/migrate-deploy.js` uses `process.env.DATABASE_URL` directly (pg Pool) — unaffected by this change.
 
 ## Risks & Edge Cases
 
-- `Number("") === 0` — if either state value is `""`, naive clamping would clamp to 0; handlers explicitly guard this
-- Thumb overlap when min === max: z-index is set via `onPointerDown`, last-touched always wins; edge case at 0 and 10 defaults to max-on-top and min-on-top respectively
-- Firefox uses `::-moz-range-thumb` — both vendor prefixes included in CSS
+- **Local dev without Supabase**: if `DIRECT_URL` is not set in `.env.local`, `prisma migrate dev` will throw `Environment variable not found: DIRECT_URL`. Mitigation: set `DIRECT_URL` equal to `DATABASE_URL` in local `.env.local`.
+- **CI pipelines**: any CI step running `prisma migrate deploy` needs `DIRECT_URL` in the environment. Vercel preview builds do not run migrations (they use the pre-deployed schema), so this only affects intentional migration runs.
+- **No schema logic change**: the change is datasource config only. No models, relations, or SQL are affected. Prisma Client generation is unaffected.
 
 ## Assumptions & Open Questions
 
-- No other page references the rating range sliders; change is isolated to `setup/page.tsx`
-- No open questions
+- Assume Supabase will be the target database (as decided in the tech stack evolution plan).
+- Assume `DIRECT_URL` will be populated by the developer when switching to Supabase. This PR only wires the schema; it does not set env vars.
+- No open questions — the change is unambiguous and well-documented by Prisma.
 
 ## Out of Scope
 
-- Touch event handling beyond what the native `<input type="range">` provides
-- Changing the 0–10 scale or the 0.5 step
-- Any other filter UI changes
+- Setting env vars in `.env.local`, Vercel, or CI — that is an infrastructure step.
+- Running the actual database migration to Supabase.
+- Changes to `scripts/migrate-deploy.js` (it uses raw pg Pool, not Prisma migrate engine).
+- Any model or relation changes.
 
 ## Readiness Verdict: READY FOR PLANNING
 
-Two files to change: `app/globals.css` (new CSS class) and `app/room/[code]/setup/page.tsx` (state, handlers, JSX).
+One file, one line added: `prisma/schema.prisma` — `directUrl = env("DIRECT_URL")` in the datasource block.
