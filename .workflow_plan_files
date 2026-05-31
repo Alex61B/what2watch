@@ -1,3 +1,5 @@
 prisma.config.ts
 package.json
 app/api/rooms/[code]/start/route.ts
+lib/tmdb.ts
+__tests__/lib/tmdb.test.ts

@@ -81,7 +81,7 @@ export function buildDiscoverUrl(serviceIds: ServiceId[], filters: DiscoverFilte
     'vote_count.gte': '100',
   })
 
-  if (filters.genres?.length) params.set('with_genres', filters.genres.join(','))
+  if (filters.genres?.length) params.set('with_genres', filters.genres.join('|'))
   if (filters.maxRuntime) params.set('with_runtime.lte', String(filters.maxRuntime))
   if (filters.minRating) params.set('vote_average.gte', String(filters.minRating))
   if (filters.maxRating) params.set('vote_average.lte', String(filters.maxRating))

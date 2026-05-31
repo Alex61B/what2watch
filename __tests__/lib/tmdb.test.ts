@@ -24,9 +24,9 @@ describe('buildDiscoverUrl', () => {
     expect(url).toContain('watch_region=US')
   })
 
-  it('includes genre filter when provided', () => {
+  it('includes genre filter as a union (pipe-separated) when provided', () => {
     const url = buildDiscoverUrl(['netflix'], { genres: [28, 12] })
-    expect(url).toContain('with_genres=28%2C12')
+    expect(url).toContain('with_genres=28%7C12')
   })
 
   it('includes runtime filter when maxRuntime provided', () => {
