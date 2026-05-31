@@ -9,76 +9,186 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ code: string }> }
 ) {
-  const { code } = await params
-  const sessionToken = await getSessionToken()
-  if (!sessionToken) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let stage = 'init'
+  let roomCode: string | undefined
+  try {
+    stage = 'params'
+    const { code } = await params
+    roomCode = code
 
-  const member = await prisma.member.findUnique({ where: { sessionToken } })
-  if (!member) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    stage = 'session'
+    const sessionToken = await getSessionToken()
+    if (!sessionToken) {
+      console.warn('[votes] returning 401', { reason: 'unauthorized_no_session', roomCode })
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
 
-  const room = await prisma.room.findUnique({ where: { code } })
-  if (!room || room.id !== member.roomId) {
-    return NextResponse.json({ error: 'Room not found' }, { status: 404 })
-  }
-  if (room.status !== 'VOTING') {
-    return NextResponse.json({ error: 'Room is not in voting state' }, { status: 409 })
-  }
+    stage = 'member-lookup'
+    const member = await prisma.member.findUnique({ where: { sessionToken } })
+    console.log('[votes] member lookup', { roomCode, found: !!member })
+    if (!member) {
+      console.warn('[votes] returning 401', { reason: 'unauthorized_no_member', roomCode })
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
 
-  const body = await request.json().catch(() => ({}))
-  const { tmdbMovieId, vote } = body
-  if (!tmdbMovieId || typeof vote !== 'boolean') {
-    return NextResponse.json(
-      { error: 'tmdbMovieId (string) and vote (boolean) are required' },
-      { status: 400 }
-    )
-  }
+    console.log('[votes] request', {
+      roomCode,
+      memberId: member.id,
+      userId: member.userId,
+      timestamp: new Date().toISOString(),
+    })
 
-  const currentEntry = await prisma.roomQueue.findFirst({
-    where: { roomId: room.id, position: room.currentPosition },
-    select: { tmdbMovieId: true },
-  })
+    stage = 'room-lookup'
+    const room = await prisma.room.findUnique({ where: { code } })
+    console.log('[votes] room lookup', { roomCode, found: !!room, status: room?.status ?? null })
+    if (!room || room.id !== member.roomId) {
+      console.warn('[votes] returning 404', {
+        reason: 'room_not_found',
+        roomCode,
+        memberId: member.id,
+        memberRoomId: member.roomId,
+        foundRoomId: room?.id ?? null,
+      })
+      return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+    }
+    if (room.status !== 'VOTING') {
+      console.warn('[votes] returning 409', {
+        reason: 'room_wrong_state',
+        roomCode,
+        actual: room.status,
+        required: 'VOTING',
+      })
+      return NextResponse.json({ error: 'Room is not in voting state' }, { status: 409 })
+    }
 
-  if (!currentEntry || currentEntry.tmdbMovieId !== tmdbMovieId) {
-    return NextResponse.json(
-      {
-        error: 'Stale vote',
+    stage = 'body-parse'
+    const body = await request.json().catch(() => ({}))
+    const { tmdbMovieId, vote } = body
+    if (!tmdbMovieId || typeof vote !== 'boolean') {
+      console.warn('[votes] returning 400', {
+        reason: 'bad_request_missing_field',
+        roomCode,
+        hasTmdbMovieId: typeof tmdbMovieId === 'string',
+        voteType: typeof vote,
+      })
+      return NextResponse.json(
+        { error: 'tmdbMovieId (string) and vote (boolean) are required' },
+        { status: 400 }
+      )
+    }
+
+    stage = 'staleness-check'
+    const currentEntry = await prisma.roomQueue.findFirst({
+      where: { roomId: room.id, position: room.currentPosition },
+      select: { tmdbMovieId: true },
+    })
+    const queueLength = await prisma.roomQueue.count({ where: { roomId: room.id } })
+    console.log('[queue]', {
+      roomId: room.id,
+      currentPosition: room.currentPosition,
+      queueVersion: room.queueVersion,
+      queueLength,
+      op: 'vote_staleness_check',
+    })
+
+    if (!currentEntry || currentEntry.tmdbMovieId !== tmdbMovieId) {
+      console.warn('[votes] returning 409', {
+        reason: 'stale_vote',
+        roomCode,
+        memberId: member.id,
+        submittedMovieId: tmdbMovieId,
+        currentMovieId: currentEntry?.tmdbMovieId ?? null,
         currentPosition: room.currentPosition,
         queueVersion: room.queueVersion,
-        currentMovieId: currentEntry?.tmdbMovieId ?? null,
-      },
-      { status: 409 }
+      })
+      return NextResponse.json(
+        {
+          error: 'Stale vote',
+          currentPosition: room.currentPosition,
+          queueVersion: room.queueVersion,
+          currentMovieId: currentEntry?.tmdbMovieId ?? null,
+        },
+        { status: 409 }
+      )
+    }
+
+    stage = 'vote-upsert'
+    console.log('[vote]', {
+      roomId: room.id,
+      movieId: tmdbMovieId,
+      vote,
+      memberId: member.id,
+    })
+    await prisma.vote.upsert({
+      where: { roomId_memberId_tmdbMovieId: { roomId: room.id, memberId: member.id, tmdbMovieId } },
+      create: { roomId: room.id, memberId: member.id, tmdbMovieId, vote },
+      update: { vote },
+    })
+
+    await prisma.member.update({ where: { id: member.id }, data: { lastSeenAt: new Date() } })
+
+    if (!vote) {
+      stage = 'advance-no'
+      const advance = await advanceQueueAtomic(room.id, room.currentPosition, room.queueVersion)
+      console.log('[votes] advance', {
+        roomId: room.id,
+        trigger: 'no',
+        result: advance.advanced ? 'advanced' : advance.reason.toLowerCase(),
+        memberId: member.id,
+      })
+      return NextResponse.json({ matched: false, advance })
+    }
+
+    stage = 'check-match'
+    const matchedMovieId = await checkForMatch(room.id, tmdbMovieId)
+    console.log('[votes] match check', {
+      roomId: room.id,
+      tmdbMovieId,
+      matched: !!matchedMovieId,
+    })
+    if (!matchedMovieId) return NextResponse.json({ matched: false })
+
+    stage = 'match-fetch'
+    const queueEntry = await prisma.roomQueue.findUnique({
+      where: { roomId_tmdbMovieId: { roomId: room.id, tmdbMovieId: matchedMovieId } },
+    })
+
+    let matchedMovie = null
+    try {
+      const movie = await getMovieById(matchedMovieId)
+      matchedMovie = { ...movie, watchUrl: queueEntry?.watchUrl, streamingService: queueEntry?.streamingService }
+    } catch (err) {
+      console.error('[votes] matched movie tmdb fetch failed', {
+        roomId: room.id,
+        matchedMovieId,
+        message: err instanceof Error ? err.message : String(err),
+      })
+      matchedMovie = { tmdbId: matchedMovieId, watchUrl: queueEntry?.watchUrl, streamingService: queueEntry?.streamingService }
+    }
+
+    stage = 'advance-match'
+    const advance = await advanceQueueAtomic(room.id, room.currentPosition, room.queueVersion)
+    console.log('[votes] advance', {
+      roomId: room.id,
+      trigger: 'match',
+      result: advance.advanced ? 'advanced' : advance.reason.toLowerCase(),
+      memberId: member.id,
+      matchedMovieId,
+    })
+
+    return NextResponse.json({ matched: true, movie: matchedMovie, advance })
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err))
+    console.error('[votes] fatal error', {
+      stage,
+      roomCode,
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    })
+    return NextResponse.json(
+      { error: error.message, stack: error.stack, name: error.name, stage },
+      { status: 500 }
     )
   }
-
-  await prisma.vote.upsert({
-    where: { roomId_memberId_tmdbMovieId: { roomId: room.id, memberId: member.id, tmdbMovieId } },
-    create: { roomId: room.id, memberId: member.id, tmdbMovieId, vote },
-    update: { vote },
-  })
-
-  await prisma.member.update({ where: { id: member.id }, data: { lastSeenAt: new Date() } })
-
-  if (!vote) {
-    const advance = await advanceQueueAtomic(room.id, room.currentPosition, room.queueVersion)
-    return NextResponse.json({ matched: false, advance })
-  }
-
-  const matchedMovieId = await checkForMatch(room.id, tmdbMovieId)
-  if (!matchedMovieId) return NextResponse.json({ matched: false })
-
-  const queueEntry = await prisma.roomQueue.findUnique({
-    where: { roomId_tmdbMovieId: { roomId: room.id, tmdbMovieId: matchedMovieId } },
-  })
-
-  let matchedMovie = null
-  try {
-    const movie = await getMovieById(matchedMovieId)
-    matchedMovie = { ...movie, watchUrl: queueEntry?.watchUrl, streamingService: queueEntry?.streamingService }
-  } catch {
-    matchedMovie = { tmdbId: matchedMovieId, watchUrl: queueEntry?.watchUrl, streamingService: queueEntry?.streamingService }
-  }
-
-  const advance = await advanceQueueAtomic(room.id, room.currentPosition, room.queueVersion)
-
-  return NextResponse.json({ matched: true, movie: matchedMovie, advance })
 }

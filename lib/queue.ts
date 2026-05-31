@@ -10,6 +10,15 @@ export async function advanceQueueAtomic(
   expectedPosition: number,
   expectedVersion: number,
 ): Promise<AdvanceResult> {
+  const queueLength = await prisma.roomQueue.count({ where: { roomId } })
+  console.log('[queue]', {
+    roomId,
+    currentPosition: expectedPosition,
+    queueVersion: expectedVersion,
+    queueLength,
+    op: 'advance_attempt',
+  })
+
   const cas = await prisma.room.updateMany({
     where: { id: roomId, currentPosition: expectedPosition, queueVersion: expectedVersion },
     data: {
@@ -19,6 +28,12 @@ export async function advanceQueueAtomic(
   })
 
   if (cas.count === 0) {
+    console.warn('[advanceQueue]', {
+      roomId,
+      oldPosition: expectedPosition,
+      newPosition: expectedPosition,
+      result: 'cas_lost',
+    })
     return { advanced: false, reason: 'CAS_LOST' }
   }
 
@@ -28,10 +43,14 @@ export async function advanceQueueAtomic(
   })
 
   if (!room) {
+    console.error('[advanceQueue]', {
+      roomId,
+      oldPosition: expectedPosition,
+      newPosition: null,
+      result: 'room_vanished',
+    })
     return { advanced: false, reason: 'ROOM_VANISHED' }
   }
-
-  const queueLength = await prisma.roomQueue.count({ where: { roomId } })
 
   let status: RoomStatus = room.status
   if (room.currentPosition >= queueLength && status === 'VOTING') {
@@ -40,7 +59,22 @@ export async function advanceQueueAtomic(
       data: { status: 'DRAINED' },
     })
     status = 'DRAINED'
+    console.log('[queue]', {
+      roomId,
+      currentPosition: room.currentPosition,
+      queueVersion: room.queueVersion,
+      queueLength,
+      op: 'drained_transition',
+    })
   }
+
+  console.log('[advanceQueue]', {
+    roomId,
+    oldPosition: expectedPosition,
+    newPosition: room.currentPosition,
+    result: 'advanced',
+    status,
+  })
 
   return {
     advanced: true,

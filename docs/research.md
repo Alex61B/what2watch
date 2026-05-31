@@ -1,89 +1,73 @@
-# Research: Shared Real-Time Veto Queue
+# Research: Structured Observability Across Voting/Queue/TMDB Code Paths
 
 ## Requirements Summary
 
-Replace the current per-member shuffled queue with a single shared queue per room where:
+Add structured `console.log` / `console.warn` / `console.error` calls across the five voting/queue API routes (`poll`, `start`, `votes`, `watched`, `queue`) plus `lib/queue.ts` (CAS helper) and `lib/tmdb.ts` (external API client) so that production incidents can be diagnosed from Vercel logs alone — without local reproduction.
 
-- All active members see the same "current" movie at any given time, determined by `Room.currentPosition` indexing into the shared `RoomQueue`.
-- A **NO** vote ("veto") from any member immediately advances the queue for everyone — the movie is appended to a per-room `skippedMovieIds` list and `currentPosition` is incremented atomically.
-- A **YES** vote is recorded silently; if all currently-active members of the room have YES'd the same `(roomId, currentPosition)`, the server writes a `Match` row and advances the queue the same way as a NO.
-- All clients converge on the new current movie within a small bounded latency (≤2s p95) via short polling against a cheap ETag (`Room.queueVersion`).
-- When `currentPosition >= roomQueue.length`, the room transitions to a new `DRAINED` status; the UI renders an end-of-queue view.
+Concretely, every route must log:
 
-The functional outcome is "any veto kills the movie for everyone, immediately." The non-functional outcome is "no duplicate skips, no stale votes, no client desync."
+1. **Request start** — `roomCode`, `memberId` (after session resolution), `userId`, `timestamp`.
+2. **Database lookups** — entity name + `found: boolean`.
+3. **Early returns** — `console.warn` with the response status and a machine-readable `reason` code, before every 400/401/403/404/409.
+4. **Queue state reads/writes** — `roomId`, `currentPosition`, `queueVersion`, `queueLength`.
+5. **Vote events** — `roomId`, `movieId`, `vote`, `memberId`.
+6. **Queue advancement** — `oldPosition`, `newPosition`, `trigger` (NO/match/etc).
+7. **TMDB request/response** — `url`, `filters`, response `status`, `resultCount`.
+8. **Fatal errors** — top-level try/catch with `console.error({ stage, name, message, stack })`.
+
+The existing `/api/rooms/[code]/start` route already follows this pattern (shipped 2026-05-31 in commit `b1f1135`). This cycle extends the pattern to the other routes and to the shared `lib/` helpers.
 
 ## Stack Choices
 
 | Concern | Choice | Rationale |
 |---|---|---|
-| Realtime sync | **Short polling with ETag (`If-None-Match`)**, 1.5s interval, returns 304 when `queueVersion` is unchanged | Vercel Hobby/Pro serverless functions cannot hold a persistent WebSocket. SSE is possible but adds per-room connection cost; for an MVP a 1.5s polling tick is good enough for the 2s p95 target. Polling code is also trivially debuggable. SSE/WebSocket migration deferred to a phase-2 ticket. |
-| Concurrency control | **Postgres compare-and-swap via `WHERE currentPosition = $expected`** | Native to Prisma's `updateMany`. Simpler than `SELECT ... FOR UPDATE` row locks, and Prisma reports affected-row count so a racy advance is detected by `count === 0`. |
-| Versioning / ETag | **Integer `queueVersion` on `Room`**, bumped on every advance | Cheaper than hashing state; monotonic; trivial `If-None-Match`. |
-| Skipped movie storage | **`String[]` column on `Room` (`skippedMovieIds`)** | Append-only list, small (~60 entries max per session), no joins needed. Avoids creating a separate table for an MVP-scale dataset. |
-| Vote staleness check | **Vote payload carries `tmdbMovieId`; server compares to `roomQueue[currentPosition].tmdbMovieId`** | Single round trip, no extra read on the client. 409 on mismatch tells the client to re-render from server state. |
-| Per-member queue | **Retire `MemberQueue` as the source of truth for the voting screen.** Either drop the table or repurpose as `MemberSeen`. Decision: **drop** for MVP. | Per-member shuffling fundamentally contradicts "everyone sees the same movie." Keeping it as a secondary table invites desync bugs. |
-| Match logic reuse | **Existing `Match` table + `lib/match` helpers** | Already tested (`__tests__/lib/match.test.ts`). Match creation runs inside the same transaction as the YES vote's advance. |
+| Logging mechanism | Plain `console.log/warn/error` with object payloads | The user spec asks for this verbatim; Vercel's log stream JSON-encodes object payloads automatically and exposes them in the log search UI. No new dependency. |
+| Log structure | Tagged prefix (`[route]`, `[queue]`, `[advanceQueue]`, `[tmdb]`, `[vote]`) + structured object | Tags make Vercel's log-search filter trivial (`[advanceQueue]` finds every queue advance). Keeps the spec uniform. |
+| Helper extraction | **No** central `lib/log.ts` helper for the MVP | User spec asks for direct `console.log` calls; extracting a wrapper now adds an abstraction the user didn't request. Easy to refactor later when log shape stabilizes. |
+| Sensitive-value handling | Log IDs, not session tokens or full request bodies | `memberId`, `userId`, `roomId`, `tmdbMovieId` are safe. The TMDB API key lives in the Authorization header, not the URL, so logging the URL is safe. Never log session tokens or password hashes. |
+| Stage breadcrumb | Mutable `let stage = '...'` updated before each major step, included in the catch payload | Matches the `start` route's existing pattern. The catch handler then logs `stage` so any uncaught throw is pinpointed to a specific step. |
 
 ## Environment Verification
 
-- `.workflow_state` = RESEARCH (post-cycle reset, confirmed by `cat .workflow_state`).
-- `.workflow_failures` = 0.
-- Prior cycle (debug instrumentation + genre union) verified via `bash scripts/verify.sh` — 42 tests passing, typecheck and lint clean.
-- Tech stack confirmed in `AGENTS.md`: Next.js 15 App Router, TypeScript, Prisma ORM, PostgreSQL, NextAuth 5, Tailwind, Jest.
-- Production deploy is live at `https://what2watch-gamma-sable.vercel.app` serving commit `4bee8fc` (verified via `gh api .../deployments`).
-- Vercel runtime constraints (no persistent WebSocket connections on serverless functions; ~10s execution limit on Hobby, ~5min on Pro) inform the polling-over-SSE decision.
-- Database: Supabase Postgres. Schema migrations require explicit user approval per the project's Prisma migration rule (see existing memory). New columns on `Room` are non-blocking adds with defaults; safe even on live data.
+- `.workflow_state` = RESEARCH (post-cycle reset, confirmed).
+- Production deploy is live at `https://what2watch-gamma-sable.vercel.app` serving commit `3a388a1` (verified earlier in this session via the deployments API).
+- The existing `start` route's stage-breadcrumb pattern (shipped earlier) is the model — readers will recognize the same shape across all instrumented routes.
+- Vercel's log retention surface accepts structured object args to `console.log` and renders them as JSON in the Functions log view. No `pino`/`winston` setup needed.
 
 ## Risks & Edge Cases
 
 | Risk | Mitigation |
 |---|---|
-| **Simultaneous NO votes on the same movie.** Two users veto within ~50ms. | CAS update: `UPDATE Room SET currentPosition = $X+1, queueVersion = $V+1, skippedMovieIds = array_append(skippedMovieIds, $movieId) WHERE id = $R AND currentPosition = $X`. First wins. Subsequent votes see `count === 0`, return 409, client refetches state. Movie appears once in skip list. |
-| **Stale YES vote arrives after queue advanced.** User A is on movie #5; user B vetos; A's YES arrives 200ms later. | Vote body carries `tmdbMovieId`. Server compares to current. Mismatch → 409 + current state. Vote never applied to the wrong movie. |
-| **Stale NO vote arrives after queue advanced.** Same as above but a NO. | Same mechanism. The "redundant veto" cannot double-skip — the CAS WHERE clause would already see the new `currentPosition`. |
-| **Match-eligible YES arrives while another user vetoes.** All-YES count completes for movie #5 in the same instant a NO for #5 arrives. | Both end up as CAS attempts. Whichever transaction commits first wins. Lost transaction returns 409 to its caller; UI re-renders. No `Match` row is orphaned because the match write is inside the same transaction as the advance. |
-| **Late joiner.** User joins mid-session, several movies already skipped. | First `/state` poll returns full snapshot: `currentPosition`, `currentMovie`, `skippedMovieIds`, `queueVersion`, `status`, `activeMemberCount`. Client renders from the snapshot. No client-side replay. |
-| **All members but one leave; remaining user keeps voting.** YES match condition relies on "all active members YES'd." | "Active member" computed from `Member.leftAt IS NULL` at vote-evaluation time. Single member remaining → their YES alone satisfies the all-YES count → match recorded. (Product decision: confirm with user; alternative is "needs ≥ 2 members for a match".) |
-| **Queue drains.** All movies vetoed or matched, `currentPosition >= length`. | CAS advance that would push position past the end instead sets `status = 'DRAINED'` in the same transaction. Polling clients see new status, swap to the DRAINED view. |
-| **Network blip on the voting client.** User taps NO, response is delayed. | Vote button locked until either (a) the response returns, or (b) a poll observes a new `queueVersion`, or (c) 5s timeout fires re-enabling the button. Prevents dead UI without enabling double-vote. |
-| **Polling cost.** 1.5s polling per active client × N members × M concurrent rooms. | `If-None-Match: "<queueVersion>"` returns 304 with no body and no DB read (handler short-circuits after a `SELECT queueVersion FROM Room WHERE id = $r`). Expected steady-state: ~0.7 RPS per member, single indexed select, minimal Vercel function cost. |
-| **Pre-existing per-member queue rows.** Live rooms in `MemberQueue` from the current code path. | Migration order: ship new vote API + new `Room` columns first (additive, safe). Then ship the new voting UI that reads from `RoomQueue`/`currentPosition`. Then, once no live room is using `MemberQueue`, ship a follow-up migration that drops the table. Three commits; never an inconsistent live state. |
-| **Race between Start-handler and first vote.** Race between `Room.status = 'VOTING'` write and first incoming vote. | Vote handler short-circuits if `room.status !== 'VOTING'` (returns 409). Start handler already writes status inside a transaction with the queue creation. |
-| **Vote idempotency on client retries.** User taps YES, request times out, client retries. | `Vote` table gets a unique constraint on `(memberId, tmdbMovieId)`. Duplicate insert → `P2002` → server treats as success (idempotent). |
-| **Production observability.** "Vote disappeared" / "out of sync" complaints. | Carry forward the `stage`-based logging pattern from the recently-shipped `start/route.ts`. Every vote handler logs `{ stage, voterId, position, version, vote, decision }` on success and the full structured payload on failure. |
+| **Log volume / cost.** Polling fires every 1.5s per active client; `[poll]` would emit several hundred logs per session. | The 304-cache-hit path in `/poll` short-circuits early and emits only one terse log line per 304. The hot 200 path runs only when `queueVersion` actually changes — bounded by veto/match frequency, not poll frequency. |
+| **Sensitive data leakage.** Logging `request.body` would expose session details; logging full Vote objects would expose voting patterns. | Spec-allowed fields only: IDs, codes, booleans, counts. Bodies are not logged in full. TMDB key is in the header, not the URL — `url` is safe to log. |
+| **Pre-existing logs muddling output.** `start` already has logs. | Pattern is identical, no duplication. Existing logs are kept. |
+| **Logging breaks code paths via thrown errors.** A `JSON.stringify` cycle inside `console.log` would crash the handler. | Payloads are all flat objects of primitives. No circular structures. |
+| **Test mocks emit logs.** Jest tests will run our new console calls and clutter stdout. | Jest captures stdout; the test runner already tolerates this (see existing `start` tests). Optional: silence via a global Jest setup, but not in this PR. |
+| **TMDB URL logging exposes filter values.** Filters are user-selected genres/runtime/rating; not sensitive. | Allowed. |
+| **Async ordering of `console.log`.** Vercel orders by entry timestamp; structured logs should still appear in execution order. | Acceptable; if interleaving becomes an issue later, a per-request UUID added to every payload restores ordering. |
 
 ## Assumptions & Open Questions
 
-**Assumptions (acting as if true unless overridden):**
+**Assumptions:**
 
-1. Match semantics: a `Match` is recorded when **all currently-active members** have voted YES on the same movie. (Same model as today's matching; just gated on the shared `currentPosition`.)
-2. Single-member rooms can match. If the host is the only active member and votes YES, that's a match. (If product wants ≥ 2, change a constant; cheap.)
-3. We don't surface vetoers' identity in the UI. The product currently treats votes as anonymous from the recipient's perspective; preserved here.
-4. We don't allow vote retraction in MVP. Once submitted, votes are final until the queue advances.
-5. The host's existing "Start" action is the only entry to `VOTING` status. No mid-session "deal more movies" feature in this plan — captured as future work.
+1. Vercel's log search permits free-text/grep matching on the tag prefixes (`[advanceQueue]`, `[tmdb]`, etc.). True for the standard Functions log view.
+2. `console.warn` and `console.error` are surfaced in the same log stream as `console.log` with severity markers. True for Vercel.
+3. Adding logging is purely additive; no behavioral change to any handler. Existing tests should continue to pass unchanged.
 
-**Open questions (will surface to user before locking the plan):**
+**Open questions (will surface in PLAN if blocking):**
 
-1. Should YES votes from non-host members be visible in real time to other members ("3/4 voted yes"), or only revealed when a match is recorded? Current product UI doesn't show this; defaulting to "no live count" unless asked.
-2. When `status = DRAINED` and the host re-deals (future feature), do we reset `skippedMovieIds` or carry it forward as a filter? Out of scope; flagging.
-3. Polling interval: 1.5s recommended. Acceptable for product? (Trade-off: lower interval = snappier feel + higher cost.)
+1. Should every poll request log a single line even on 304? (Default: yes — terse one-liner `[poll] 304 cache hit, roomId=X, version=V`. Otherwise 304s are silent which makes "is the client polling at all?" hard to answer.)
+2. Add a per-request correlation ID (UUID) so a single request's many log lines can be grep'd together? (Default: defer to a follow-up; user spec doesn't include it. List as recommended additional instrumentation in the plan.)
 
 ## Out of Scope
 
-Explicitly **not** part of this feature:
-
-- SSE / WebSocket / Ably / Pusher / Supabase Realtime integration (deferred to phase 2).
-- "Deal more movies" / re-deal action on a drained room.
-- Vote retraction / undo.
-- Live "X of Y members have voted" indicator on the voting screen.
-- Per-member "already seen" filtering on rejoin (only matters if we let users leave & rejoin during VOTING; product doesn't currently support this).
-- Replacing the existing `Match` discovery flow — we extend it, don't rewrite it.
-- Dropping `MemberQueue` in this PR. Drop ships in a follow-up PR after the new code path is fully live.
-- Changes to the `Start` handler beyond what's required to initialize `currentPosition = 0` and `queueVersion = 0` on the room (already defaulted by the schema migration; the handler may need no changes).
-- Authentication, billing, or session handling changes.
+- Replacing `console.*` with a structured logger (pino, winston, sentry).
+- Sentry / Axiom integration.
+- Metrics / counters / tracing spans (OpenTelemetry).
+- Log redaction beyond what the spec already implies.
+- Adding logging to routes outside the listed five (e.g., `/api/auth/*`, `/api/rooms/[code]/route.ts`, `/api/rooms/[code]/members`) — separate task.
+- Test changes beyond what's strictly required to keep them passing.
 
 ## Readiness Verdict: READY FOR PLANNING
 
-All seven sections complete. Assumptions and open questions are recorded but do not block planning — they are bounded product decisions with sensible defaults. The technical mechanism (CAS-based advance, tmdbMovieId staleness check, queueVersion ETag, short polling) is concrete enough to derive a file manifest from.
-
-Proceed to PLAN: define `.workflow_plan_files`, schema migration, API surface, component changes, and acceptance criteria.
+All seven sections complete. The spec is concrete (the user supplied example log shapes), the file set is bounded (5 routes + 2 lib files), and there's no design ambiguity. Proceed to PLAN.

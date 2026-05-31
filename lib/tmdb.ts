@@ -53,17 +53,29 @@ const cache = new Map<string, { data: unknown; expiresAt: number }>()
 async function tmdbFetch<T>(url: string): Promise<T> {
   const key = process.env.TMDB_API_KEY
   if (!key || key === 'your_tmdb_api_key_here') {
+    console.error('[tmdb] missing api key', { url })
     throw new Error('TMDB_API_KEY is not configured. Set it in .env.local.')
   }
 
   const cached = cache.get(url)
-  if (cached && cached.expiresAt > Date.now()) return cached.data as T
+  if (cached && cached.expiresAt > Date.now()) {
+    console.log('[tmdb] response', { url, status: 200, cacheHit: true })
+    return cached.data as T
+  }
 
+  console.log('[tmdb] request', { url, cacheHit: false })
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${key}` },
   })
-  if (!res.ok) throw new Error(`TMDB fetch failed: ${res.status}`)
+  if (!res.ok) {
+    console.error('[tmdb] response', { url, status: res.status, cacheHit: false, ok: false })
+    throw new Error(`TMDB fetch failed: ${res.status}`)
+  }
   const data = await res.json()
+  const resultCount = Array.isArray((data as { results?: unknown[] }).results)
+    ? (data as { results: unknown[] }).results.length
+    : undefined
+  console.log('[tmdb] response', { url, status: res.status, cacheHit: false, resultCount })
   cache.set(url, { data, expiresAt: Date.now() + 60 * 60 * 1000 })
   return data as T
 }
