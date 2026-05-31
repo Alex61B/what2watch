@@ -59,4 +59,16 @@ describe('VotingCard', () => {
     render(<VotingCard movie={{ ...baseMovie, posterUrl: '' }} onVote={jest.fn()} />)
     expect(screen.getByText('No Image')).toBeInTheDocument()
   })
+
+  it('disables both buttons when disabled prop is true', () => {
+    const onVote = jest.fn()
+    render(<VotingCard movie={baseMovie} onVote={onVote} disabled />)
+    const yesBtn = screen.getByRole('button', { name: /yes/i })
+    const noBtn = screen.getByRole('button', { name: /no/i })
+    expect(yesBtn).toBeDisabled()
+    expect(noBtn).toBeDisabled()
+    fireEvent.click(yesBtn)
+    fireEvent.click(noBtn)
+    expect(onVote).not.toHaveBeenCalled()
+  })
 })

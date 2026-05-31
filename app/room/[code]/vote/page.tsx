@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import VotingCard from "@/components/VotingCard";
+import DrainedScreen from "@/components/DrainedScreen";
 
 interface Movie {
   tmdbId: string;
@@ -17,132 +18,102 @@ interface Movie {
   streamingService: string;
 }
 
-interface QueueResponse {
-  movie: Movie;
-  remaining: number;
-}
-
-interface VoteResponse {
-  matched: boolean;
-  movie?: { title: string; [key: string]: unknown };
-}
-
 interface PollResponse {
   status: string;
+  memberCount: number;
+  matchedMovie: unknown;
   rejectedMovieIds?: string[];
   watchedFilter?: boolean;
+  currentPosition: number;
+  queueVersion: number;
+  currentMovie: Movie | null;
+  isHost: boolean;
 }
+
+const POLL_INTERVAL_MS = 1500;
+const VOTE_LOCK_TIMEOUT_MS = 5000;
 
 export default function VotePage() {
   const router = useRouter();
   const params = useParams();
   const code = params.code as string;
 
-  const [current, setCurrent] = useState<QueueResponse | null | undefined>(
-    undefined
-  ); // undefined = loading, null = exhausted
+  const [state, setState] = useState<PollResponse | null | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
-  const [fetchError, setFetchError] = useState<string | null>(null);
   const [swipeDir, setSwipeDir] = useState<"left" | "right" | null>(null);
   const [markingWatched, setMarkingWatched] = useState(false);
-  const [watchedFilterActive, setWatchedFilterActive] = useState(false);
 
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stoppedRef = useRef(false);
+  const lastVersionRef = useRef<number | null>(null);
+  const submittingRef = useRef(false);
 
-  const stopPolling = useCallback(() => {
-    if (pollingRef.current !== null) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-    stoppedRef.current = true;
-  }, []);
+  useEffect(() => {
+    submittingRef.current = submitting;
+  }, [submitting]);
 
-  const fetchQueue = useCallback(async () => {
+  const pollOnce = useCallback(async () => {
+    if (stoppedRef.current) return;
     try {
-      const res = await fetch(`/api/rooms/${code}/queue`);
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setFetchError(data.error ?? "Failed to load queue.");
+      const headers: HeadersInit = {};
+      if (lastVersionRef.current !== null) {
+        headers["If-None-Match"] = `"${lastVersionRef.current}"`;
+      }
+      const res = await fetch(`/api/rooms/${code}/poll`, { headers });
+      if (res.status === 304) return;
+      if (!res.ok) return;
+      const data: PollResponse = await res.json();
+      lastVersionRef.current = data.queueVersion;
+      setState(data);
+      if (data.status === "MATCHED") {
+        stoppedRef.current = true;
+        router.replace(`/room/${code}/match`);
         return;
       }
-      const data: QueueResponse | null = await res.json();
-      setCurrent(data); // null means exhausted
+      if (data.status === "DONE") {
+        stoppedRef.current = true;
+        router.replace(`/room/${code}/done`);
+      }
     } catch {
-      setFetchError("Failed to load queue.");
+      // silently ignore poll errors
     }
-  }, [code]);
+  }, [code, router]);
 
-  // Initial fetch
+  // Initial fetch + polling loop. The initial call is scheduled via setTimeout so
+  // both invocations are driven by timer callbacks (external system), satisfying
+  // react-hooks/set-state-in-effect.
   useEffect(() => {
-    void (async () => {
-      await fetchQueue();
-    })();
-  }, [fetchQueue]);
-
-  // Polling every 3 seconds
-  useEffect(() => {
-    pollingRef.current = setInterval(async () => {
-      if (stoppedRef.current) return;
-      try {
-        const res = await fetch(`/api/rooms/${code}/poll`);
-        if (!res.ok) return;
-        const data: PollResponse = await res.json();
-        if (typeof data.watchedFilter === 'boolean') {
-          setWatchedFilterActive(data.watchedFilter);
-        }
-        if (data.status === "MATCHED") {
-          stopPolling();
-          router.replace(`/room/${code}/match`);
-          return;
-        } else if (data.status === "DONE") {
-          stopPolling();
-          router.replace(`/room/${code}/done`);
-          return;
-        }
-        // Auto-advance if the current movie was globally rejected by another user
-        setCurrent(prev => {
-          if (
-            prev?.movie &&
-            data.rejectedMovieIds?.includes(prev.movie.tmdbId)
-          ) {
-            void fetchQueue();
-          }
-          return prev;
-        });
-      } catch {
-        // silently ignore poll errors
-      }
-    }, 3000);
-
+    const initialId = setTimeout(() => {
+      void pollOnce();
+    }, 0);
+    const intervalId = setInterval(() => {
+      void pollOnce();
+    }, POLL_INTERVAL_MS);
     return () => {
-      if (pollingRef.current !== null) {
-        clearInterval(pollingRef.current);
-        pollingRef.current = null;
-      }
+      clearTimeout(initialId);
+      clearInterval(intervalId);
     };
-  }, [code, router, stopPolling, fetchQueue]);
+  }, [pollOnce]);
 
   const animateAndAdvance = useCallback(
     async (direction: "left" | "right", action: () => Promise<void>) => {
       setSwipeDir(direction);
-      // Run animation and action in parallel; advance queue after both settle
       await Promise.all([
         action(),
         new Promise<void>(resolve => setTimeout(resolve, 300)),
       ]);
       setSwipeDir(null);
-      await fetchQueue();
     },
-    [fetchQueue]
+    []
   );
 
   const handleVote = useCallback(
     async (vote: boolean) => {
-      if (submitting || current === undefined || current === null) return;
-      const tmdbMovieId = current.movie.tmdbId;
+      if (submittingRef.current || !state?.currentMovie) return;
+      const tmdbMovieId = state.currentMovie.tmdbId;
 
       setSubmitting(true);
+      const lockTimeout = setTimeout(() => setSubmitting(false), VOTE_LOCK_TIMEOUT_MS);
+
       try {
         await animateAndAdvance(vote ? "right" : "left", async () => {
           const res = await fetch(`/api/rooms/${code}/votes`, {
@@ -151,25 +122,26 @@ export default function VotePage() {
             body: JSON.stringify({ tmdbMovieId, vote }),
           });
           if (res.ok) {
-            const data: VoteResponse = await res.json();
+            const data = await res.json().catch(() => ({}));
             if (data.matched) {
-              stopPolling();
+              stoppedRef.current = true;
               router.replace(`/room/${code}/match`);
+              return;
             }
           }
+          await pollOnce();
         });
-      } catch {
-        await fetchQueue();
       } finally {
+        clearTimeout(lockTimeout);
         setSubmitting(false);
       }
     },
-    [submitting, current, code, router, stopPolling, fetchQueue, animateAndAdvance]
+    [state, code, router, animateAndAdvance, pollOnce]
   );
 
   const handleMarkWatched = useCallback(async () => {
-    if (markingWatched || current === undefined || current === null) return;
-    const tmdbMovieId = current.movie.tmdbId;
+    if (markingWatched || !state?.currentMovie) return;
+    const tmdbMovieId = state.currentMovie.tmdbId;
 
     setMarkingWatched(true);
     try {
@@ -179,25 +151,14 @@ export default function VotePage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ tmdbMovieId }),
         });
+        await pollOnce();
       });
-    } catch {
-      await fetchQueue();
     } finally {
       setMarkingWatched(false);
     }
-  }, [markingWatched, current, code, fetchQueue, animateAndAdvance]);
+  }, [markingWatched, state, code, animateAndAdvance, pollOnce]);
 
-  // Error state
-  if (fetchError) {
-    return (
-      <main className="min-h-screen flex items-center justify-center bg-gray-950 text-white px-4">
-        <p className="text-red-400">{fetchError}</p>
-      </main>
-    );
-  }
-
-  // Loading state (initial fetch in progress)
-  if (current === undefined) {
+  if (state === undefined) {
     return (
       <main className="min-h-screen flex items-center justify-center bg-gray-950 text-white px-4">
         <p className="text-gray-400">Loading movies…</p>
@@ -205,22 +166,14 @@ export default function VotePage() {
     );
   }
 
-  // Queue exhausted
-  if (current === null) {
+  if (state?.status === "DRAINED") {
+    return <DrainedScreen isHost={state.isHost} code={code} />;
+  }
+
+  if (!state?.currentMovie) {
     return (
       <main className="min-h-screen flex items-center justify-center bg-gray-950 text-white px-4">
-        <div className="w-full max-w-sm text-center space-y-6">
-          <h1 className="text-2xl font-bold">No more movies</h1>
-          <p className="text-gray-400">
-            You&apos;ve voted on everything. Waiting for others to finish…
-          </p>
-          <a
-            href={`/room/${code}/lobby`}
-            className="inline-block rounded-xl bg-indigo-600 hover:bg-indigo-500 px-6 py-3 text-sm font-semibold transition-colors"
-          >
-            Back to Lobby
-          </a>
-        </div>
+        <p className="text-gray-400">Waiting for the host to start…</p>
       </main>
     );
   }
@@ -228,18 +181,16 @@ export default function VotePage() {
   return (
     <main className="min-h-screen bg-gray-950 text-white px-4 py-8">
       <div className="w-full max-w-sm mx-auto space-y-4">
-        {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-lg font-semibold text-gray-200">What2Watch</h1>
           <span className="text-sm text-gray-400">
-            {current.remaining} movie{current.remaining !== 1 ? "s" : ""} left
+            Position {state.currentPosition + 1}
           </span>
         </div>
-        {watchedFilterActive && (
+        {state.watchedFilter && (
           <p className="text-xs text-indigo-400">Watched filter active</p>
         )}
 
-        {/* Voting card with swipe animation */}
         <div
           className={submitting || markingWatched ? "pointer-events-none" : ""}
           style={{
@@ -253,10 +204,14 @@ export default function VotePage() {
             transition: "transform 0.3s ease, opacity 0.3s ease",
           }}
         >
-          <VotingCard movie={current.movie} onVote={handleVote} />
+          <VotingCard
+            key={state.queueVersion}
+            movie={state.currentMovie}
+            onVote={handleVote}
+            disabled={submitting}
+          />
         </div>
 
-        {/* Already watched */}
         <button
           type="button"
           onClick={handleMarkWatched}
@@ -266,7 +221,6 @@ export default function VotePage() {
           {markingWatched ? "Marking…" : "Already seen it"}
         </button>
 
-        {/* Submission indicator */}
         {submitting && (
           <p className="text-center text-sm text-gray-400">Submitting…</p>
         )}

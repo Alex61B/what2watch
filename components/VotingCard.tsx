@@ -17,16 +17,19 @@ interface Movie {
 interface VotingCardProps {
   movie: Movie
   onVote: (vote: boolean) => void
+  disabled?: boolean
 }
 
-export default function VotingCard({ movie, onVote }: VotingCardProps) {
+export default function VotingCard({ movie, onVote, disabled = false }: VotingCardProps) {
   const touchStartX = useRef<number | null>(null)
 
   function handleTouchStart(e: React.TouchEvent<HTMLDivElement>) {
+    if (disabled) return
     touchStartX.current = e.touches[0].clientX
   }
 
   function handleTouchEnd(e: React.TouchEvent<HTMLDivElement>) {
+    if (disabled) return
     if (touchStartX.current === null) return
     const delta = e.changedTouches[0].clientX - touchStartX.current
     touchStartX.current = null
@@ -56,7 +59,6 @@ export default function VotingCard({ movie, onVote }: VotingCardProps) {
             No Image
           </div>
         )}
-        {/* Title overlay */}
         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-4 pb-3 pt-8">
           <h2 className="text-lg font-bold leading-tight text-white drop-shadow">
             {movie.title}
@@ -66,7 +68,6 @@ export default function VotingCard({ movie, onVote }: VotingCardProps) {
 
       {/* Info */}
       <div className="flex flex-1 flex-col gap-2 p-4">
-
         <div className="flex items-center gap-3 text-sm text-gray-500">
           <span>{movie.year}{movie.runtime ? ` · ${movie.runtime} min` : ''}</span>
           <span className="text-yellow-500">★ {movie.rating}</span>
@@ -80,14 +81,16 @@ export default function VotingCard({ movie, onVote }: VotingCardProps) {
         <button
           type="button"
           onClick={() => onVote(false)}
-          className="flex-1 rounded-xl bg-red-500 py-3 text-base font-semibold text-white transition-colors hover:bg-red-600 active:bg-red-700"
+          disabled={disabled}
+          className="flex-1 rounded-xl bg-red-500 py-3 text-base font-semibold text-white transition-colors hover:bg-red-600 active:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           NO
         </button>
         <button
           type="button"
           onClick={() => onVote(true)}
-          className="flex-1 rounded-xl bg-green-500 py-3 text-base font-semibold text-white transition-colors hover:bg-green-600 active:bg-green-700"
+          disabled={disabled}
+          className="flex-1 rounded-xl bg-green-500 py-3 text-base font-semibold text-white transition-colors hover:bg-green-600 active:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           YES
         </button>

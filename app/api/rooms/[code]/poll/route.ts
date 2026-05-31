@@ -4,7 +4,7 @@ import { getSessionToken } from '@/lib/session'
 import { getMovieById } from '@/lib/tmdb'
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ code: string }> }
 ) {
   const { code } = await params
@@ -17,7 +17,15 @@ export async function GET(
   const room = await prisma.room.findUnique({ where: { code } })
   if (!room || room.id !== member.roomId) return NextResponse.json({ error: 'Room not found' }, { status: 404 })
 
-  // Heartbeat — keep member active
+  const ifNoneMatch = request.headers.get('if-none-match')
+  if (ifNoneMatch && ifNoneMatch.replace(/"/g, '') === String(room.queueVersion)) {
+    await prisma.member.update({ where: { id: member.id }, data: { lastSeenAt: new Date() } })
+    return new NextResponse(null, {
+      status: 304,
+      headers: { ETag: `"${room.queueVersion}"` },
+    })
+  }
+
   await prisma.member.update({ where: { id: member.id }, data: { lastSeenAt: new Date() } })
 
   const memberCount = await prisma.member.count({
@@ -37,12 +45,45 @@ export async function GET(
     }
   }
 
-  // Globally rejected movie IDs — needed by clients to auto-advance away from rejected cards
   const rejectedMovieIds = await prisma.vote.findMany({
     where: { roomId: room.id, vote: false },
     select: { tmdbMovieId: true },
     distinct: ['tmdbMovieId'],
   }).then(rows => rows.map(r => r.tmdbMovieId))
 
-  return NextResponse.json({ status: room.status, memberCount, matchedMovie, rejectedMovieIds, watchedFilter: room.watchedFilter })
+  const currentEntry = await prisma.roomQueue.findFirst({
+    where: { roomId: room.id, position: room.currentPosition },
+    select: { tmdbMovieId: true, watchUrl: true, streamingService: true },
+  })
+
+  let currentMovie = null
+  if (currentEntry) {
+    try {
+      const movie = await getMovieById(currentEntry.tmdbMovieId)
+      currentMovie = { ...movie, watchUrl: currentEntry.watchUrl, streamingService: currentEntry.streamingService }
+    } catch {
+      currentMovie = {
+        tmdbId: currentEntry.tmdbMovieId,
+        watchUrl: currentEntry.watchUrl,
+        streamingService: currentEntry.streamingService,
+      }
+    }
+  }
+
+  return NextResponse.json(
+    {
+      status: room.status,
+      memberCount,
+      matchedMovie,
+      rejectedMovieIds,
+      watchedFilter: room.watchedFilter,
+      currentPosition: room.currentPosition,
+      queueVersion: room.queueVersion,
+      currentMovie,
+      isHost: member.isHost,
+    },
+    {
+      headers: { ETag: `"${room.queueVersion}"` },
+    }
+  )
 }

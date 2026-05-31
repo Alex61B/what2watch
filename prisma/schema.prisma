@@ -33,6 +33,8 @@ model Room {
   createdAt         DateTime   @default(now())
   expiresAt         DateTime
   watchedFilter     Boolean    @default(false)
+  currentPosition   Int        @default(0)
+  queueVersion      Int        @default(0)
   members           Member[]
   queue             RoomQueue[]
   votes             Vote[]
@@ -42,6 +44,7 @@ enum RoomStatus {
   LOBBY
   VOTING
   MATCHED
+  DRAINED
   DONE
 }
 

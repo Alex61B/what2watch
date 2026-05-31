@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { getSessionToken } from '@/lib/session'
 import { checkForMatch } from '@/lib/match'
 import { getMovieById } from '@/lib/tmdb'
+import { advanceQueueAtomic } from '@/lib/queue'
 
 export async function POST(
   request: Request,
@@ -32,7 +33,23 @@ export async function POST(
     )
   }
 
-  // Upsert vote (idempotent on retry)
+  const currentEntry = await prisma.roomQueue.findFirst({
+    where: { roomId: room.id, position: room.currentPosition },
+    select: { tmdbMovieId: true },
+  })
+
+  if (!currentEntry || currentEntry.tmdbMovieId !== tmdbMovieId) {
+    return NextResponse.json(
+      {
+        error: 'Stale vote',
+        currentPosition: room.currentPosition,
+        queueVersion: room.queueVersion,
+        currentMovieId: currentEntry?.tmdbMovieId ?? null,
+      },
+      { status: 409 }
+    )
+  }
+
   await prisma.vote.upsert({
     where: { roomId_memberId_tmdbMovieId: { roomId: room.id, memberId: member.id, tmdbMovieId } },
     create: { roomId: room.id, memberId: member.id, tmdbMovieId, vote },
@@ -41,7 +58,10 @@ export async function POST(
 
   await prisma.member.update({ where: { id: member.id }, data: { lastSeenAt: new Date() } })
 
-  if (!vote) return NextResponse.json({ matched: false })
+  if (!vote) {
+    const advance = await advanceQueueAtomic(room.id, room.currentPosition, room.queueVersion)
+    return NextResponse.json({ matched: false, advance })
+  }
 
   const matchedMovieId = await checkForMatch(room.id, tmdbMovieId)
   if (!matchedMovieId) return NextResponse.json({ matched: false })
@@ -58,5 +78,7 @@ export async function POST(
     matchedMovie = { tmdbId: matchedMovieId, watchUrl: queueEntry?.watchUrl, streamingService: queueEntry?.streamingService }
   }
 
-  return NextResponse.json({ matched: true, movie: matchedMovie })
+  const advance = await advanceQueueAtomic(room.id, room.currentPosition, room.queueVersion)
+
+  return NextResponse.json({ matched: true, movie: matchedMovie, advance })
 }
