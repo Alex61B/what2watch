@@ -4,6 +4,8 @@ import { getSessionToken } from '@/lib/session'
 import { checkForMatch } from '@/lib/match'
 import { getMovieById } from '@/lib/tmdb'
 import { advanceQueueAtomic } from '@/lib/queue'
+import { resolveMemberUserId } from '@/lib/link'
+import { addPreference } from '@/lib/preferences'
 
 export async function POST(
   request: Request,
@@ -126,6 +128,19 @@ export async function POST(
     })
 
     await prisma.member.update({ where: { id: member.id }, data: { lastSeenAt: new Date() } })
+
+    if (vote) {
+      try {
+        const userId = await resolveMemberUserId(member)
+        if (userId) await addPreference(userId, tmdbMovieId, 'WATCHLIST', room.id)
+      } catch (hookErr) {
+        console.error('[votes] watchlist hook failed (non-fatal)', {
+          roomCode,
+          memberId: member.id,
+          message: hookErr instanceof Error ? hookErr.message : String(hookErr),
+        })
+      }
+    }
 
     if (!vote) {
       stage = 'advance-no'
