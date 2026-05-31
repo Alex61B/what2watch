@@ -9,7 +9,8 @@ export default function AuthStatus() {
 
   if (session?.user) {
     return (
-      <div className="flex items-center gap-2 text-sm">
+      <div className="flex items-center gap-3 text-sm">
+        <Link href="/profile" className="text-gray-300 hover:text-white transition-colors">Profile</Link>
         <span className="text-gray-400">{session.user.name ?? session.user.email}</span>
         <button
           onClick={() => signOut({ callbackUrl: '/' })}
