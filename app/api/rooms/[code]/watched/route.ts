@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getSessionToken } from '@/lib/session'
+import { resolveMemberUserId } from '@/lib/link'
+import { addPreference } from '@/lib/preferences'
 
 export async function POST(
   request: Request,
@@ -72,6 +74,17 @@ export async function POST(
       memberId: member.id,
       tmdbMovieId,
     })
+
+    try {
+      const userId = await resolveMemberUserId(member)
+      if (userId) await addPreference(userId, tmdbMovieId, 'SEEN_BEFORE', room.id)
+    } catch (hookErr) {
+      console.error('[watched] seen-before hook failed (non-fatal)', {
+        roomCode,
+        memberId: member.id,
+        message: hookErr instanceof Error ? hookErr.message : String(hookErr),
+      })
+    }
 
     return NextResponse.json({ ok: true })
   } catch (err) {

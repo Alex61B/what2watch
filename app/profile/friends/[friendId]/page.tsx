@@ -1,0 +1,21 @@
+// app/profile/friends/[friendId]/page.tsx
+import Link from 'next/link'
+import { requireUserId } from '@/components/ProfileGuard'
+import FriendDetailClient from '@/components/FriendDetailClient'
+
+export default async function FriendDetailPage({
+  params,
+}: {
+  params: Promise<{ friendId: string }>
+}) {
+  await requireUserId()
+  const { friendId } = await params
+  return (
+    <main className="min-h-screen bg-gray-950 text-white px-4 py-12">
+      <div className="w-full max-w-2xl mx-auto space-y-6">
+        <Link href="/profile/friends" className="text-sm text-gray-400 hover:text-gray-200">← Friends</Link>
+        <FriendDetailClient friendId={friendId} />
+      </div>
+    </main>
+  )
+}

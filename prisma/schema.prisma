@@ -3,38 +3,41 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
 model User {
-  id            String    @id @default(uuid())
-  email         String    @unique
-  displayName   String
-  savedServices String[]
-  savedFilters  Json?
-  createdAt     DateTime  @default(now())
-  name          String?
-  emailVerified DateTime?
-  image         String?
-  passwordHash  String?
-  members       Member[]
-  accounts      Account[]
+  id                     String                @id @default(uuid())
+  email                  String                @unique
+  displayName            String
+  savedServices          String[]
+  savedFilters           Json?
+  createdAt              DateTime              @default(now())
+  name                   String?
+  emailVerified          DateTime?
+  image                  String?
+  passwordHash           String?
+  members                Member[]
+  accounts               Account[]
+  friendRequestsSent     Friendship[]          @relation("FriendRequestsSent")
+  friendRequestsReceived Friendship[]          @relation("FriendRequestsReceived")
+  moviePreferences       UserMoviePreference[]
 }
 
 model Room {
-  id                String     @id @default(uuid())
-  code              String     @unique
+  id                String      @id @default(uuid())
+  code              String      @unique
   streamingServices String[]
   filters           Json?
-  status            RoomStatus @default(LOBBY)
+  status            RoomStatus  @default(LOBBY)
   matchedMovieId    String?
-  createdAt         DateTime   @default(now())
+  createdAt         DateTime    @default(now())
   expiresAt         DateTime
-  watchedFilter     Boolean    @default(false)
-  currentPosition   Int        @default(0)
-  queueVersion      Int        @default(0)
+  watchedFilter     Boolean     @default(false)
+  currentPosition   Int         @default(0)
+  queueVersion      Int         @default(0)
   members           Member[]
   queue             RoomQueue[]
   votes             Vote[]
@@ -46,6 +49,17 @@ enum RoomStatus {
   MATCHED
   DRAINED
   DONE
+}
+
+enum FriendshipStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+enum MoviePreferenceType {
+  WATCHLIST
+  SEEN_BEFORE
 }
 
 model Member {
@@ -140,4 +154,43 @@ model MemberQueue {
 
   @@unique([memberId, tmdbMovieId])
   @@index([memberId, position])
+}
+
+model Friendship {
+  id          String           @id @default(uuid())
+  requesterId String
+  receiverId  String
+  status      FriendshipStatus @default(PENDING)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  requester   User             @relation("FriendRequestsSent", fields: [requesterId], references: [id], onDelete: Cascade)
+  receiver    User             @relation("FriendRequestsReceived", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([requesterId, receiverId])
+  @@index([receiverId])
+  @@index([requesterId])
+}
+
+model UserMoviePreference {
+  id           String              @id @default(uuid())
+  userId       String
+  tmdbMovieId  String
+  type         MoviePreferenceType
+  sourceRoomId String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tmdbMovieId, type])
+  @@index([userId, type])
+}
+
+model MovieCache {
+  tmdbMovieId String   @id
+  title       String
+  posterUrl   String
+  year        Int
+  overview    String
+  rating      Float
+  updatedAt   DateTime @updatedAt
 }

@@ -1,73 +1,63 @@
-# Research: Structured Observability Across Voting/Queue/TMDB Code Paths
+# Research — User Profile & Friend Page
 
-## Requirements Summary
+Companion to the implementation plan at `docs/superpowers/plans/2026-05-31-user-profile-and-friends.md`.
 
-Add structured `console.log` / `console.warn` / `console.error` calls across the five voting/queue API routes (`poll`, `start`, `votes`, `watched`, `queue`) plus `lib/queue.ts` (CAS helper) and `lib/tmdb.ts` (external API client) so that production incidents can be diagnosed from Vercel logs alone — without local reproduction.
+## 1. Requirements Summary
 
-Concretely, every route must log:
+Two coupled features for signed-in users:
 
-1. **Request start** — `roomCode`, `memberId` (after session resolution), `userId`, `timestamp`.
-2. **Database lookups** — entity name + `found: boolean`.
-3. **Early returns** — `console.warn` with the response status and a machine-readable `reason` code, before every 400/401/403/404/409.
-4. **Queue state reads/writes** — `roomId`, `currentPosition`, `queueVersion`, `queueLength`.
-5. **Vote events** — `roomId`, `movieId`, `vote`, `memberId`.
-6. **Queue advancement** — `oldPosition`, `newPosition`, `trigger` (NO/match/etc).
-7. **TMDB request/response** — `url`, `filters`, response `status`, `resultCount`.
-8. **Fatal errors** — top-level try/catch with `console.error({ stage, name, message, stack })`.
+- **User Profile** — a hub (`/profile`) linking to Settings, Friends, Watch List, and Seen-Before pages. The Watch List auto-fills when a user votes "Yes" in a room; the Seen-Before list fills on "Already seen it". Both lists are viewable and items removable. Friends: search users, send/accept/decline requests, see accepted friends and pending requests separately.
+- **Friend Page** — for an accepted friend, show the **shared watch list** (intersection of both users' watch lists), **previous sessions together** (rooms both participated in), and per-session **shared "Yes"** movies (movies both voted Yes on in that room).
 
-The existing `/api/rooms/[code]/start` route already follows this pattern (shipped 2026-05-31 in commit `b1f1135`). This cycle extends the pattern to the other routes and to the shared `lib/` helpers.
+Access control: only signed-in users reach profile/friend features; non-friends cannot view a friend page; anonymous room participants must not expose data.
 
-## Stack Choices
+## 2. Stack Choices
 
-| Concern | Choice | Rationale |
-|---|---|---|
-| Logging mechanism | Plain `console.log/warn/error` with object payloads | The user spec asks for this verbatim; Vercel's log stream JSON-encodes object payloads automatically and exposes them in the log search UI. No new dependency. |
-| Log structure | Tagged prefix (`[route]`, `[queue]`, `[advanceQueue]`, `[tmdb]`, `[vote]`) + structured object | Tags make Vercel's log-search filter trivial (`[advanceQueue]` finds every queue advance). Keeps the spec uniform. |
-| Helper extraction | **No** central `lib/log.ts` helper for the MVP | User spec asks for direct `console.log` calls; extracting a wrapper now adds an abstraction the user didn't request. Easy to refactor later when log shape stabilizes. |
-| Sensitive-value handling | Log IDs, not session tokens or full request bodies | `memberId`, `userId`, `roomId`, `tmdbMovieId` are safe. The TMDB API key lives in the Authorization header, not the URL, so logging the URL is safe. Never log session tokens or password hashes. |
-| Stage breadcrumb | Mutable `let stage = '...'` updated before each major step, included in the catch payload | Matches the `start` route's existing pattern. The catch handler then logs `stage` so any uncaught throw is pinpointed to a specific step. |
+Leverage existing patterns only — no new dependencies.
 
-## Environment Verification
+- **Auth:** NextAuth 5 JWT sessions. Server side: `await auth()` → `session.user.id`. Client side: `useSession()` (provider already in `app/layout.tsx`).
+- **DB:** Prisma 6 + `@prisma/adapter-pg`. Add three models (`Friendship`, `UserMoviePreference`, `MovieCache`) + two enums.
+- **Logic-in-lib pattern:** Existing code puts testable logic in `lib/` (e.g. `lib/queue.ts`, `lib/match.ts`) with mocked-`@/lib/prisma` Jest tests; route handlers stay thin. New logic follows suit (`lib/preferences.ts`, `lib/friends.ts`, `lib/movie-cache.ts`, `lib/link.ts`).
+- **TMDB metadata:** reuse `getMovieById` from `lib/tmdb.ts`, backed by a new persistent `MovieCache` for list rendering and fallback.
+- **UI:** Tailwind dark theme matching `app/page.tsx`; reuse `StreamingServicePicker`.
+- **Testing:** Jest + ts-jest for lib; `@testing-library/react` for one client component, matching `__tests__/` conventions.
 
-- `.workflow_state` = RESEARCH (post-cycle reset, confirmed).
-- Production deploy is live at `https://what2watch-gamma-sable.vercel.app` serving commit `3a388a1` (verified earlier in this session via the deployments API).
-- The existing `start` route's stage-breadcrumb pattern (shipped earlier) is the model — readers will recognize the same shape across all instrumented routes.
-- Vercel's log retention surface accepts structured object args to `console.log` and renders them as JSON in the Functions log view. No `pino`/`winston` setup needed.
+## 3. Environment Verification
 
-## Risks & Edge Cases
+- `prisma/schema.prisma` confirmed: `User` has `id/email/displayName/savedServices/savedFilters/passwordHash`; `Member` has nullable `userId`, `roomId`, `joinedAt`, unique `sessionToken`; `Vote { roomId, memberId, tmdbMovieId, vote, votedAt }`; `WatchedMovie { memberId, tmdbMovieId }`; `Room { code, status, createdAt }`.
+- Auth wiring confirmed in `auth.ts` (Google + Credentials, JWT, `session.user.id` threaded) and `types/next-auth.d.ts`.
+- Two session systems confirmed: room cookie `w2w_session` (`lib/session.ts` / `getSessionToken`) vs NextAuth identity (`auth()`). `/api/auth/link-member` links them best-effort from the landing page only.
+- Existing vote/watched routes (`app/api/rooms/[code]/votes|watched/route.ts`) confirmed as the hook points.
+- Migration tooling: `prisma migrate dev` requires `DIRECT_URL` in `.env.local` (per project memory) and **explicit user approval** (restricted action).
+- `scripts/verify.sh` runs typecheck → lint → jest and writes `.workflow_verified`.
 
-| Risk | Mitigation |
-|---|---|
-| **Log volume / cost.** Polling fires every 1.5s per active client; `[poll]` would emit several hundred logs per session. | The 304-cache-hit path in `/poll` short-circuits early and emits only one terse log line per 304. The hot 200 path runs only when `queueVersion` actually changes — bounded by veto/match frequency, not poll frequency. |
-| **Sensitive data leakage.** Logging `request.body` would expose session details; logging full Vote objects would expose voting patterns. | Spec-allowed fields only: IDs, codes, booleans, counts. Bodies are not logged in full. TMDB key is in the header, not the URL — `url` is safe to log. |
-| **Pre-existing logs muddling output.** `start` already has logs. | Pattern is identical, no duplication. Existing logs are kept. |
-| **Logging breaks code paths via thrown errors.** A `JSON.stringify` cycle inside `console.log` would crash the handler. | Payloads are all flat objects of primitives. No circular structures. |
-| **Test mocks emit logs.** Jest tests will run our new console calls and clutter stdout. | Jest captures stdout; the test runner already tolerates this (see existing `start` tests). Optional: silence via a global Jest setup, but not in this PR. |
-| **TMDB URL logging exposes filter values.** Filters are user-selected genres/runtime/rating; not sensitive. | Allowed. |
-| **Async ordering of `console.log`.** Vercel orders by entry timestamp; structured logs should still appear in execution order. | Acceptable; if interleaving becomes an issue later, a per-request UUID added to every payload restores ordering. |
+## 4. Risks & Edge Cases
 
-## Assumptions & Open Questions
+- **Identity bridge gap:** a signed-in user who joins via `/api/rooms/[code]/members` gets `Member.userId = null`. Mitigation: `lib/link.ts#resolveMemberUserId` links at vote time via `auth()`; anonymous members return null → no preference written.
+- **Migration drift:** generated migration SQL under `prisma/migrations/` is unplannable by exact path and trips `.workflow_drift`; user runs `advance_state.sh drift-to-plan` in terminal (known issue per project memory).
+- **TMDB unavailability:** movie may be deleted/unreachable → `MovieCache` fallback metadata (`Title unavailable`).
+- **Duplicate prevention:** `@@unique` on `Friendship(requesterId,receiverId)` and `UserMoviePreference(userId,tmdbMovieId,type)`; upserts + `FriendError` codes (DUPLICATE/ALREADY_FRIENDS/SELF).
+- **Non-fatal hooks:** watch-list/seen-before writes wrapped in try/catch so they never break voting.
+- **Access control:** `areFriends` 403 in friend routes; `requireUserId` redirect in pages; unfriend deletes the row → access removed.
+- **Yes/No mismatch:** shared-Yes intersects `vote: true` for both users only.
+- **N+1:** `getSessionsTogether` runs one shared-Yes count per room — acceptable at MVP volume.
 
-**Assumptions:**
+## 5. Assumptions & Open Questions
 
-1. Vercel's log search permits free-text/grep matching on the tag prefixes (`[advanceQueue]`, `[tmdb]`, etc.). True for the standard Functions log view.
-2. `console.warn` and `console.error` are surfaced in the same log stream as `console.log` with severity markers. True for Vercel.
-3. Adding logging is purely additive; no behavioral change to any handler. Existing tests should continue to pass unchanged.
+- **Assumption:** session/vote history needs **no new tables** — existing `Member.userId` + `Vote` + `Room` cover it. (Spec listed redundant tables; dropped per YAGNI.)
+- **Assumption:** "shared watch list" = intersection of `UserMoviePreference` WATCHLIST rows (equivalent to "movies both said Yes to" since Yes votes populate the watchlist).
+- **Assumption:** streaming-provider metadata in `MovieCache` is deferred ("if available").
+- **Open question (non-blocking):** should declined friend requests be re-sendable? Plan assumes yes (re-opens the row). Revisit if undesired.
+- **Open dependency:** migration requires user approval + `DIRECT_URL` configured.
 
-**Open questions (will surface in PLAN if blocking):**
+## 6. Out of Scope
 
-1. Should every poll request log a single line even on 304? (Default: yes — terse one-liner `[poll] 304 cache hit, roomId=X, version=V`. Otherwise 304s are silent which makes "is the client polling at all?" hard to answer.)
-2. Add a per-request correlation ID (UUID) so a single request's many log lines can be grep'd together? (Default: defer to a follow-up; user spec doesn't include it. List as recommended additional instrumentation in the plan.)
+- New vote-history / session-member tables (already covered by existing schema).
+- Streaming-provider caching in `MovieCache`.
+- `MemberQueue` retirement (tracked separately in project memory).
+- Real-time updates on profile/friend pages (fetch-on-load is sufficient).
+- Notifications for incoming friend requests.
 
-## Out of Scope
+## 7. Readiness Verdict: READY FOR PLANNING
 
-- Replacing `console.*` with a structured logger (pino, winston, sentry).
-- Sentry / Axiom integration.
-- Metrics / counters / tracing spans (OpenTelemetry).
-- Log redaction beyond what the spec already implies.
-- Adding logging to routes outside the listed five (e.g., `/api/auth/*`, `/api/rooms/[code]/route.ts`, `/api/rooms/[code]/members`) — separate task.
-- Test changes beyond what's strictly required to keep them passing.
-
-## Readiness Verdict: READY FOR PLANNING
-
-All seven sections complete. The spec is concrete (the user supplied example log shapes), the file set is bounded (5 routes + 2 lib files), and there's no design ambiguity. Proceed to PLAN.
+Architecture validated against the live codebase; risks identified with mitigations; the only external dependency is user approval of the Prisma migration. The implementation plan decomposes this into 18 TDD tasks. **READY FOR PLANNING.**
