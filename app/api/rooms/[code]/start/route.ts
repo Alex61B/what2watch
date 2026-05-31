@@ -17,105 +17,136 @@ export async function POST(
   _request: Request,
   { params }: { params: Promise<{ code: string }> }
 ) {
-  const { code } = await params
-  const sessionToken = await getSessionToken()
-  if (!sessionToken) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const member = await prisma.member.findUnique({ where: { sessionToken } })
-  if (!member?.isHost) {
-    return NextResponse.json({ error: 'Only the host can start the session' }, { status: 403 })
-  }
-
-  const room = await prisma.room.findUnique({
-    where: { code },
-    include: { members: { where: { leftAt: null } } },
-  })
-
-  if (!room || room.id !== member.roomId) {
-    return NextResponse.json({ error: 'Room not found' }, { status: 404 })
-  }
-  if (room.status !== 'LOBBY') {
-    return NextResponse.json({ error: 'Room has already started' }, { status: 409 })
-  }
-  if (room.members.length < 2) {
-    return NextResponse.json({ error: 'Need at least 2 members to start' }, { status: 400 })
-  }
-  if (room.streamingServices.length === 0) {
-    return NextResponse.json({ error: 'Select at least one streaming service' }, { status: 400 })
-  }
-
-  // Validate that all service IDs are known ServiceIds
-  const validServiceIds = STREAMING_SERVICES.map(s => s.id)
-  const serviceIds = room.streamingServices.filter(
-    (s): s is ServiceId => validServiceIds.includes(s as ServiceId)
-  )
-  if (serviceIds.length === 0) {
-    return NextResponse.json({ error: 'No valid streaming services found' }, { status: 400 })
-  }
-
-  const filters = (room.filters ?? {}) as { genres?: number[]; maxRuntime?: number; minRating?: number }
-
-  let movies
+  let stage = 'init'
   try {
-    movies = await discoverMovies(serviceIds, filters, 60)
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ error: `Failed to fetch movies: ${message}` }, { status: 502 })
-  }
+    stage = 'params'
+    const { code } = await params
 
-  if (movies.length === 0) {
+    stage = 'env-check'
+    const envReport = {
+      hasTmdbKey: Boolean(process.env.TMDB_API_KEY) && process.env.TMDB_API_KEY !== 'your_tmdb_api_key_here',
+      hasDatabaseUrl: Boolean(process.env.DATABASE_URL),
+      hasAuthSecret: Boolean(process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET),
+      nodeEnv: process.env.NODE_ENV,
+      vercelEnv: process.env.VERCEL_ENV,
+    }
+    console.log('[rooms/start] env', envReport)
+
+    stage = 'session'
+    const sessionToken = await getSessionToken()
+    if (!sessionToken) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+    stage = 'member-lookup'
+    const member = await prisma.member.findUnique({ where: { sessionToken } })
+    if (!member?.isHost) {
+      return NextResponse.json({ error: 'Only the host can start the session' }, { status: 403 })
+    }
+
+    stage = 'room-lookup'
+    const room = await prisma.room.findUnique({
+      where: { code },
+      include: { members: { where: { leftAt: null } } },
+    })
+
+    if (!room || room.id !== member.roomId) {
+      return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+    }
+    if (room.status !== 'LOBBY') {
+      return NextResponse.json({ error: 'Room has already started' }, { status: 409 })
+    }
+    if (room.members.length < 2) {
+      return NextResponse.json({ error: 'Need at least 2 members to start' }, { status: 400 })
+    }
+    if (room.streamingServices.length === 0) {
+      return NextResponse.json({ error: 'Select at least one streaming service' }, { status: 400 })
+    }
+
+    stage = 'validate-services'
+    const validServiceIds = STREAMING_SERVICES.map(s => s.id)
+    const serviceIds = room.streamingServices.filter(
+      (s): s is ServiceId => validServiceIds.includes(s as ServiceId)
+    )
+    if (serviceIds.length === 0) {
+      return NextResponse.json({ error: 'No valid streaming services found' }, { status: 400 })
+    }
+
+    const filters = (room.filters ?? {}) as { genres?: number[]; maxRuntime?: number; minRating?: number }
+
+    stage = 'tmdb-discover'
+    console.log('[rooms/start] calling discoverMovies', { serviceIds, filters })
+    const movies = await discoverMovies(serviceIds, filters, 60)
+    console.log('[rooms/start] discoverMovies returned', { count: movies.length })
+
+    if (movies.length === 0) {
+      return NextResponse.json(
+        { error: 'No movies found for these services and filters. Try broadening your filters.' },
+        { status: 422 }
+      )
+    }
+
+    stage = 'shuffle-and-persist'
+    const shuffled = shuffle(movies)
+
+    await prisma.$transaction([
+      prisma.room.update({ where: { id: room.id }, data: { status: 'VOTING' } }),
+      prisma.roomQueue.createMany({
+        data: shuffled.map((movie, position) => ({
+          roomId: room.id,
+          tmdbMovieId: movie.tmdbId,
+          position,
+          streamingService: serviceIds[0],
+          watchUrl: `https://www.themoviedb.org/movie/${movie.tmdbId}`,
+        })),
+        skipDuplicates: true,
+      }),
+    ])
+
+    stage = 'member-queues'
+    const movieIds = shuffled.map(m => m.tmdbId)
+    const memberQueueRows = room.members.flatMap(m =>
+      shuffle([...movieIds]).map((tmdbMovieId, position) => ({
+        memberId: m.id,
+        tmdbMovieId,
+        position,
+      }))
+    )
+    if (memberQueueRows.length > 0) {
+      await prisma.memberQueue.createMany({ data: memberQueueRows, skipDuplicates: true })
+    }
+
+    stage = 'save-prefs'
+    try {
+      const session = await auth()
+      if (session?.user?.id) {
+        await prisma.user.update({
+          where: { id: session.user.id },
+          data: {
+            savedServices: serviceIds,
+            savedFilters: filters,
+          },
+        })
+      }
+    } catch (prefErr) {
+      console.warn('[rooms/start] non-fatal: failed to save user prefs', prefErr)
+    }
+
+    return NextResponse.json({ queueSize: shuffled.length })
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err))
+    console.error('[rooms/start] fatal error', {
+      stage,
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    })
     return NextResponse.json(
-      { error: 'No movies found for these services and filters. Try broadening your filters.' },
-      { status: 422 }
+      {
+        error: error.message,
+        stack: error.stack,
+        name: error.name,
+        stage,
+      },
+      { status: 500 }
     )
   }
-
-  const shuffled = shuffle(movies)
-
-  await prisma.$transaction([
-    prisma.room.update({ where: { id: room.id }, data: { status: 'VOTING' } }),
-    prisma.roomQueue.createMany({
-      data: shuffled.map((movie, position) => ({
-        roomId: room.id,
-        tmdbMovieId: movie.tmdbId,
-        position,
-        // MVP: TMDB discover doesn't return per-movie provider info.
-        // Store the first selected service as an approximation; watch URL goes to TMDB.
-        streamingService: serviceIds[0],
-        watchUrl: `https://www.themoviedb.org/movie/${movie.tmdbId}`,
-      })),
-      skipDuplicates: true,
-    }),
-  ])
-
-  // Build per-member shuffled queues from the shared movie pool
-  const movieIds = shuffled.map(m => m.tmdbId)
-  const memberQueueRows = room.members.flatMap(m =>
-    shuffle([...movieIds]).map((tmdbMovieId, position) => ({
-      memberId: m.id,
-      tmdbMovieId,
-      position,
-    }))
-  )
-  if (memberQueueRows.length > 0) {
-    await prisma.memberQueue.createMany({ data: memberQueueRows, skipDuplicates: true })
-  }
-
-  // Persist this room's settings to the host's user preferences if logged in
-  try {
-    const session = await auth()
-    if (session?.user?.id) {
-      await prisma.user.update({
-        where: { id: session.user.id },
-        data: {
-          savedServices: serviceIds,
-          savedFilters: filters,
-        },
-      })
-    }
-  } catch {
-    // Non-fatal — preferences saved on best-effort basis
-  }
-
-  return NextResponse.json({ queueSize: shuffled.length })
 }
