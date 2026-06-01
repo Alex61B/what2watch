@@ -16,6 +16,7 @@ export async function checkForMatch(roomId: string, tmdbMovieId: string): Promis
         SELECT COUNT(*)::bigint FROM "Member" m
         WHERE m."roomId" = ${roomId}
           AND m."leftAt" IS NULL
+          AND m."approved" = true
       ) AS active_count
     FROM "Vote" v
     WHERE v."roomId" = ${roomId}
