@@ -26,6 +26,7 @@ interface RoomMember {
 
 interface PollResponse {
   status: string;
+  name: string | null;
   memberCount: number;
   members: RoomMember[];
   matchedMovie: unknown;
@@ -191,9 +192,14 @@ export default function VotePage() {
   return (
     <main className="min-h-screen bg-gray-950 text-white px-4 py-8">
       <div className="w-full max-w-sm mx-auto space-y-4">
-        <div className="flex items-center justify-between">
-          <h1 className="text-lg font-semibold text-gray-200">What2Watch</h1>
-          <span className="text-sm text-gray-400">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold text-gray-200">What2Watch</h1>
+            {state.name && (
+              <p className="truncate text-sm text-gray-400">{state.name}</p>
+            )}
+          </div>
+          <span className="shrink-0 text-sm text-gray-400">
             Position {state.currentPosition + 1}
           </span>
         </div>

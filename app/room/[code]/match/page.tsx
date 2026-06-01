@@ -17,6 +17,7 @@ interface MatchedMovie {
 
 interface PollResponse {
   status: string;
+  name: string | null;
   memberCount: number;
   matchedMovie: MatchedMovie | null;
 }
@@ -26,6 +27,7 @@ export default function MatchPage() {
   const code = params.code as string;
 
   const [matchedMovie, setMatchedMovie] = useState<MatchedMovie | null | undefined>(undefined);
+  const [roomName, setRoomName] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchMatch() {
@@ -37,6 +39,7 @@ export default function MatchPage() {
         }
         const data: PollResponse = await res.json();
         setMatchedMovie(data.matchedMovie ?? null);
+        setRoomName(data.name ?? null);
       } catch {
         setMatchedMovie(null);
       }
@@ -55,6 +58,9 @@ export default function MatchPage() {
   return (
     <main className="min-h-screen flex flex-col items-center justify-center bg-gray-950 text-white px-4 py-10">
       <div className="w-full max-w-sm space-y-6">
+        {roomName && (
+          <p className="text-center text-sm text-gray-400">from {roomName}</p>
+        )}
         {matchedMovie ? (
           <MatchCelebration movie={matchedMovie} />
         ) : (

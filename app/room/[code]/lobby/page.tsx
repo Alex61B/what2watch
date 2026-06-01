@@ -12,6 +12,7 @@ interface RoomMember {
 
 interface RoomState {
   code: string;
+  name: string | null;
   status: string;
   streamingServices: string[];
   members: RoomMember[];
@@ -201,6 +202,9 @@ export default function LobbyPage() {
           <h1 className="text-5xl font-bold font-mono tracking-widest text-indigo-400">
             {code}
           </h1>
+          {room.name && (
+            <p className="text-lg font-medium text-gray-200">{room.name}</p>
+          )}
         </div>
 
         {!joined ? (

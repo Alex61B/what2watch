@@ -21,6 +21,7 @@ interface RoomMember {
 
 interface RoomState {
   status: "LOBBY" | "VOTING" | "MATCHED" | "DONE";
+  name: string | null;
   streamingServices: ServiceId[];
   filters: RoomFilters | null;
   watchedFilter: boolean;
@@ -43,6 +44,7 @@ export default function SetupPage() {
   const [room, setRoom] = useState<RoomState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [members, setMembers] = useState<RoomMember[]>([]);
+  const [roomName, setRoomName] = useState("");
 
   // Local copies of mutable fields
   const [services, setServices] = useState<ServiceId[]>([]);
@@ -92,6 +94,7 @@ export default function SetupPage() {
 
         setRoom(data);
         setMembers(data.members ?? []);
+        setRoomName(data.name ?? "");
         setServices(data.streamingServices ?? []);
         setWatchedFilter(data.watchedFilter ?? false);
         if (data.filters) {
@@ -157,6 +160,18 @@ export default function SetupPage() {
     }, 3000);
     return () => clearInterval(interval);
   }, [code, router]);
+
+  // Patch room name (host-only; sent on blur)
+  const patchName = useCallback(
+    async (value: string) => {
+      await fetch(`/api/rooms/${code}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: value.trim() }),
+      });
+    },
+    [code]
+  );
 
   // Patch streaming services
   const patchServices = useCallback(
@@ -298,12 +313,29 @@ export default function SetupPage() {
     <main className="min-h-screen bg-gray-950 text-white px-4 py-12">
       <div className="w-full max-w-lg mx-auto space-y-8">
         {/* Header */}
-        <div className="space-y-1">
-          <h1 className="text-3xl font-bold tracking-tight">Room Setup</h1>
-          <p className="text-gray-400 text-sm">
-            Room code:{" "}
-            <span className="font-mono font-semibold text-indigo-400">{code}</span>
-          </p>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <h1 className="text-3xl font-bold tracking-tight">Room Setup</h1>
+            <p className="text-gray-400 text-sm">
+              Room code:{" "}
+              <span className="font-mono font-semibold text-indigo-400">{code}</span>
+            </p>
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="roomName" className="block text-sm font-medium text-gray-300">
+              Room name (optional)
+            </label>
+            <input
+              id="roomName"
+              type="text"
+              placeholder="e.g. Friday Movie Night"
+              value={roomName}
+              maxLength={60}
+              onChange={(e) => setRoomName(e.target.value)}
+              onBlur={() => patchName(roomName)}
+              className="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
         </div>
 
         {/* Members — live count so the host sees who has joined */}
