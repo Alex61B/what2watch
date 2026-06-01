@@ -1,9 +1,5 @@
-prisma/schema.prisma
-lib/match.ts
-app/api/rooms/[code]/members/route.ts
 app/api/rooms/[code]/poll/route.ts
-app/api/rooms/[code]/approvals/route.ts
-app/api/rooms/[code]/votes/route.ts
+app/room/[code]/lobby/page.tsx
+app/room/[code]/setup/page.tsx
 app/room/[code]/vote/page.tsx
-__tests__/api/join-approval.test.ts
-prisma/migrations/20260601202537_add_member_approved/migration.sql
+__tests__/api/poll-cache.test.ts

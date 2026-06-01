@@ -147,7 +147,7 @@ export default function SetupPage() {
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/rooms/${code}/poll`);
+        const res = await fetch(`/api/rooms/${code}/poll`, { cache: "no-store" });
         if (!res.ok) return;
         const data: SetupPollResponse = await res.json();
         if (Array.isArray(data.members)) setMembers(data.members);
