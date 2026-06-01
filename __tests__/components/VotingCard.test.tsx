@@ -60,6 +60,12 @@ describe('VotingCard', () => {
     expect(screen.getByText('No Image')).toBeInTheDocument()
   })
 
+  it('renders LIKE and NOPE swipe stamps', () => {
+    render(<VotingCard movie={baseMovie} onVote={jest.fn()} />)
+    expect(screen.getByText(/^like$/i)).toBeInTheDocument()
+    expect(screen.getByText(/^nope$/i)).toBeInTheDocument()
+  })
+
   it('disables both buttons when disabled prop is true', () => {
     const onVote = jest.fn()
     render(<VotingCard movie={baseMovie} onVote={onVote} disabled />)

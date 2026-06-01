@@ -81,6 +81,13 @@ export async function GET(
       where: { roomId: room.id, leftAt: null },
     })
 
+    stage = 'member-list'
+    const members = await prisma.member.findMany({
+      where: { roomId: room.id, leftAt: null },
+      select: { id: true, displayName: true, isHost: true },
+      orderBy: { joinedAt: 'asc' },
+    })
+
     stage = 'matched-movie'
     let matchedMovie = null
     if (room.matchedMovieId) {
@@ -159,6 +166,7 @@ export async function GET(
       {
         status: room.status,
         memberCount,
+        members,
         matchedMovie,
         rejectedMovieIds,
         watchedFilter: room.watchedFilter,

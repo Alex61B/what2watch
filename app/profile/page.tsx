@@ -1,6 +1,7 @@
 // app/profile/page.tsx
 import Link from 'next/link'
 import { requireUserId } from '@/components/ProfileGuard'
+import ProfileHeader from '@/components/ProfileHeader'
 
 export default async function ProfilePage() {
   await requireUserId()
@@ -15,7 +16,7 @@ export default async function ProfilePage() {
   return (
     <main className="min-h-screen bg-gray-950 text-white px-4 py-12">
       <div className="w-full max-w-md mx-auto space-y-6">
-        <h1 className="text-3xl font-bold">Your Profile</h1>
+        <ProfileHeader title="Your Profile" />
         <nav className="space-y-3">
           {links.map(l => (
             <Link

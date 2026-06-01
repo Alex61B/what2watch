@@ -1,7 +1,7 @@
 // app/profile/friends/[friendId]/page.tsx
-import Link from 'next/link'
 import { requireUserId } from '@/components/ProfileGuard'
 import FriendDetailClient from '@/components/FriendDetailClient'
+import ProfileHeader from '@/components/ProfileHeader'
 
 export default async function FriendDetailPage({
   params,
@@ -13,7 +13,7 @@ export default async function FriendDetailPage({
   return (
     <main className="min-h-screen bg-gray-950 text-white px-4 py-12">
       <div className="w-full max-w-2xl mx-auto space-y-6">
-        <Link href="/profile/friends" className="text-sm text-gray-400 hover:text-gray-200">← Friends</Link>
+        <ProfileHeader backHref="/profile/friends" backLabel="← Friends" />
         <FriendDetailClient friendId={friendId} />
       </div>
     </main>
