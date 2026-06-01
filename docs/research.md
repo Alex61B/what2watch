@@ -1,63 +1,40 @@
-# Research — Fix: second user stuck on room poll (stale cross-room session cookie)
+# Research — Second user stuck on "Waiting for the host to start…"
 
-Supersedes the previous cycle's research (user-profile-and-friends, shipped 2026-05-31 — see git history / `docs/superpowers/plans/`).
+Investigation (debug instrumentation cycle). Follows the per-room session cookie change ([per-room-session-cookie], PR #1, merged 2026-06-01).
 
 ## 1. Requirements Summary
 
-Production bug: the second user cannot load a room after joining. Vercel logs for `/api/rooms/OVAL-32/poll`:
-
-```
-[poll] room lookup { roomCode: 'OVAL-32', found: true }
-[poll] returning 404 { reason: 'room_not_found',
-  memberId: '09cc19cf…', memberRoomId: 'c2788d0a…', foundRoomId: '13e466fa…' }
-```
-
-The room exists, but the cookie's member belongs to a **different** room. Required outcomes:
-1. Confirm join always (over)writes the session cookie.
-2. Confirm poll validates the cookie member belongs to the requested room.
-3. On `memberRoomId !== foundRoomId`, return a clear 403 / clear the stale cookie instead of a misleading 404 `room_not_found`.
-4. Joining a new room from the same browser must not leave a stale member cookie from an old room.
-5. Add join-route logging: requested roomCode, foundRoomId, created/found memberId, member.roomId, cookie set.
-6. Regression test: join Room A → join Room B → poll Room B succeeds.
-
-Chosen fix (user-selected): **per-room cookie scope** — cookie name `w2w_session_<CODE>`; readers resolve the token for the requested room code.
+Symptom: host starts the session and votes normally, but the **second user stays on the "Waiting for the host to start…" screen** and never advances to voting. Production logs so far show **only the host's** successful polls (`member lookup found:true`, `room lookup found:true`, `queueLength:60`, `currentPosition:0`). We have **zero logs from the second user**, so root cause is not yet known. Goal of this cycle: add temporary, targeted instrumentation to capture the second user's join + poll path and pinpoint where they get stuck.
 
 ## 2. Stack Choices
 
-No new dependencies. Next.js 15 App Router route handlers; `next/headers` `cookies()` for reads; `NextResponse.cookies.set` for writes; Jest (jsdom default, `@jest-environment node` override for route-handler tests). Cookie value stays a random 32-byte hex token mapped 1:1 to `Member.sessionToken` (unique). No Prisma schema change required.
+No new deps. `console.log`/`console.warn` instrumentation in the affected route handlers and client pages. Logs are temporary and will be removed once the culprit is found.
 
 ## 3. Environment Verification
 
-- **Writers of `w2w_session`:** `app/api/rooms/route.ts:48` (create), `app/api/rooms/[code]/members/route.ts:64` (join). Both already overwrite the cookie — requirement (1) holds today.
-- **Readers of `getSessionToken()` (all no-arg today):** `poll`, `route.ts` GET+PATCH, `votes`, `watched`, `queue`, `start` (all under `[code]`, all destructure `const { code } = await params` *before* the cookie read — safe to pass `code`), plus **`app/api/auth/link-member/route.ts:12`** (auth restricted area).
-- **`link-member` callers** (`app/page.tsx:16`, `app/auth/signin/page.tsx:29`, `app/auth/signup/page.tsx:19`) all POST with **no body** → no room code available there.
-- **Helper:** `lib/session.ts` exports `SESSION_COOKIE_NAME`, `generateSessionToken`, `getSessionToken`, `setSessionCookie` (the last two unused outside lib except getSessionToken). `SESSION_COOKIE_NAME` is asserted in `__tests__/lib/session.test.ts`.
-- **Client flow:** only `setup`/`lobby` join; `lobby`/`vote` poll on an interval and silently swallow non-OK responses. A browser already a member of room A that lands on room B's lobby/vote (deep link, bookmark, back button, second tab) polls B with A's cookie → mismatch → 404.
-- **Verify:** `scripts/verify.sh` runs typecheck → lint → jest, writes `.workflow_verified`.
+- **Both client pages silently swallow poll errors:** `app/room/[code]/lobby/page.tsx:88` and `app/room/[code]/vote/page.tsx:63` both do `if (!res.ok) return` — a non-2xx poll leaves the user frozen on the waiting screen with no console signal.
+- **Lobby** advances by polling `/poll` and redirecting on `status === 'VOTING'` (`handleRedirect`). If the second user's poll never returns 200/VOTING, no redirect fires → stuck on "Waiting for the host to start…".
+- **Vote** shows "Waiting for the host to start…" when `!state?.currentMovie`; `currentMovie` is room-level (from `roomQueue` at `room.currentPosition`), identical for all members — so a *null* currentMovie for the second user while the host sees one would mean the poll is erroring or returning a degraded state, not a per-member queue difference.
+- **poll route** already logs member/room lookup and `[queue]`, but not the final response (status, currentMovie, memberId, isHost) — so we can't see what the second user's poll actually returns.
+- **join route** already logs `[join] member created` (roomCode, foundRoomId, memberId, memberRoomId, cookie, tokenPrefix) from the cookie fix; missing the room member count.
 
 ## 4. Risks & Edge Cases
 
-- **Root cause:** a single global `w2w_session` cookie (path `/`) identifies the browser as a member of exactly one room. Poll resolves the member by token alone, then 404s on room-id mismatch. Per-room cookie names eliminate the mismatch (each room has its own cookie) and enable simultaneous multi-room membership.
-- **`link-member` (restricted/auth):** user approved editing it. Callers send no code, so link **all** `w2w_session_*` tokens to the signed-in user (`updateMany … userId: null`). Strictly better; no change to the 3 auth-page callers.
-- **Backward compatibility:** after deploy, browsers holding the old global `w2w_session` cookie read as not-joined (new cookie name). Acceptable — rooms expire in 24h; users simply re-join from the lobby. Old cookie lingers harmlessly until expiry. No data migration. Rollback = revert commit.
-- **Cookie name charset:** codes like `OVAL-32` → `w2w_session_OVAL-32`; hyphen/uppercase are valid cookie-name token chars. Code normalized to uppercase to match URL casing.
-- **Secret logging:** requirement (5) asks to log the Set-Cookie value; log the cookie **name** + a short token prefix only, never the full session secret.
-- **Test env:** route-handler tests need Node env + mocked `@/lib/prisma`, `next/headers`, `@/lib/tmdb`; cookie writes land on the returned `NextResponse` (read back via `res.cookies.get`), not on the `next/headers` jar.
+- **Leading hypothesis:** the second user's `/poll` returns a non-2xx that the client swallows. Candidates: `401` (no `w2w_session_<CODE>` cookie — join didn't set/send it), `403 wrong_room` (the new defense-in-depth branch firing — cookie resolves to a member of another room), or `200` with `currentMovie:null`. Instrumentation must reveal the **status code** distinctly.
+- **Secondary:** late join — opening the link after the host starts redirects lobby→vote before joining, leaving no cookie → poll 401 → stuck on "Loading…/Waiting".
+- Instrumentation only; no behavior change beyond surfacing swallowed poll errors to the console. Must not log full session tokens (prefix only).
 
 ## 5. Assumptions & Open Questions
 
-- **Assumption:** poll's `room.id !== member.roomId` branch becomes effectively unreachable with per-room cookies but is kept as defense-in-depth (403 `wrong_room` + clear that room's cookie).
-- **Assumption:** path stays `/` (matches the user's selected design exactly); path-scoping per room is a deferred optional hardening.
-- **Assumption:** no Prisma/schema change — `Member.sessionToken` already unique per member.
-- **Open question (non-blocking):** should `vote`/`lobby` redirect to `/setup` on a 401 (no cookie for this room) for better UX? Out of scope for the fix; noted.
+- **Open (the whole point):** is the second user's poll 401, 403, or 200-with-null-movie? The next deploy's logs (server `[poll] response` + client `[client … poll]`) answer this.
+- **Assumption:** the host's path is healthy (confirmed by existing logs); only the second user's path needs tracing.
 
 ## 6. Out of Scope
 
-- Client UX changes to lobby/vote poll-error handling (beyond what the fix needs).
-- Removing the now-effectively-dead poll mismatch branch (kept as a safety net).
-- `MemberQueue` retirement (tracked separately in project memory).
-- Any schema/migration/dependency changes.
+- The actual fix — deferred until instrumentation identifies the failing boundary.
+- Removing the swallow-on-error entirely / waiting-screen UX redesign.
+- Any schema/migration/dependency change.
 
 ## 7. Readiness Verdict: READY FOR PLANNING
 
-Root cause confirmed against the live code and the production log; fix approach selected by the user (per-room cookie scope); restricted-area edit (`link-member`) explicitly approved, with a corrected mechanism (link-all) since callers pass no code. Manifest written to `.workflow_plan_files`. **READY FOR PLANNING.**
+Failing boundary unknown; plan is to instrument join + poll (server) and lobby + vote polling (client) to capture the second user's status codes and state, then deploy and read logs. **READY FOR PLANNING.**

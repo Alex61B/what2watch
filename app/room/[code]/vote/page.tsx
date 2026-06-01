@@ -60,8 +60,21 @@ export default function VotePage() {
       }
       const res = await fetch(`/api/rooms/${code}/poll`, { headers });
       if (res.status === 304) return;
-      if (!res.ok) return;
+      // TEMP DEBUG: a swallowed non-2xx here strands the 2nd user on the waiting screen.
+      if (!res.ok) {
+        console.warn("[client vote poll] non-ok", { code, status: res.status });
+        return;
+      }
       const data: PollResponse = await res.json();
+      console.log("[client vote poll]", {
+        code,
+        httpStatus: res.status,
+        roomStatus: data.status,
+        currentMovieId: data.currentMovie?.tmdbId ?? null,
+        currentMovieTitle: data.currentMovie?.title ?? null,
+        currentPosition: data.currentPosition,
+        queueVersion: data.queueVersion,
+      });
       lastVersionRef.current = data.queueVersion;
       setState(data);
       if (data.status === "MATCHED") {
@@ -73,8 +86,8 @@ export default function VotePage() {
         stoppedRef.current = true;
         router.replace(`/room/${code}/done`);
       }
-    } catch {
-      // silently ignore poll errors
+    } catch (err) {
+      console.warn("[client vote poll] threw", { code, err });
     }
   }, [code, router]);
 

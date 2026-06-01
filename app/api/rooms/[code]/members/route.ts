@@ -60,11 +60,14 @@ export async function POST(
     }
   }
 
+  const memberCount = await prisma.member.count({ where: { roomId: room.id, leftAt: null } })
   console.log('[join] member created', {
     roomCode: code,
     foundRoomId: room.id,
+    roomStatus: room.status,
     memberId: member.id,
     memberRoomId: member.roomId,
+    memberCount,
     cookie: sessionCookieName(code),
     tokenPrefix: sessionToken.slice(0, 8),
   })
