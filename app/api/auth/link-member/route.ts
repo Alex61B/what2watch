@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@/auth'
 import { prisma } from '@/lib/prisma'
-import { getSessionToken } from '@/lib/session'
+import { getAllSessionTokens } from '@/lib/session'
 
 export async function POST() {
   const session = await auth()
@@ -9,22 +9,18 @@ export async function POST() {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
   }
 
-  const sessionToken = await getSessionToken()
-  if (!sessionToken) {
+  // Sessions are now per-room, so a browser may hold memberships in several
+  // rooms at once. Link every unlinked one to the signed-in user.
+  const sessionTokens = await getAllSessionTokens()
+  if (sessionTokens.length === 0) {
     // No room session active — nothing to link, that's fine
     return NextResponse.json({ linked: false })
   }
 
-  const member = await prisma.member.findUnique({ where: { sessionToken } })
-  if (!member) {
-    return NextResponse.json({ linked: false })
-  }
-
-  // Link the member to the user account
-  await prisma.member.update({
-    where: { id: member.id },
+  const result = await prisma.member.updateMany({
+    where: { sessionToken: { in: sessionTokens }, userId: null },
     data: { userId: session.user.id },
   })
 
-  return NextResponse.json({ linked: true })
+  return NextResponse.json({ linked: result.count > 0 })
 }

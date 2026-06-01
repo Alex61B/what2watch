@@ -19,7 +19,7 @@ export async function POST(
     roomCode = code
 
     stage = 'session'
-    const sessionToken = await getSessionToken()
+    const sessionToken = await getSessionToken(code)
     if (!sessionToken) {
       console.warn('[votes] returning 401', { reason: 'unauthorized_no_session', roomCode })
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

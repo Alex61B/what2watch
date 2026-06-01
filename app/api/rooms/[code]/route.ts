@@ -22,7 +22,7 @@ export async function GET(
 
   if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 })
 
-  const sessionToken = await getSessionToken()
+  const sessionToken = await getSessionToken(code)
   const currentMember = sessionToken
     ? await prisma.member.findFirst({
         where: { sessionToken, roomId: room.id },
@@ -61,7 +61,7 @@ export async function PATCH(
   { params }: { params: Promise<{ code: string }> }
 ) {
   const { code } = await params
-  const sessionToken = await getSessionToken()
+  const sessionToken = await getSessionToken(code)
   if (!sessionToken) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const member = await prisma.member.findUnique({ where: { sessionToken } })
