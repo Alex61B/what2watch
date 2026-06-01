@@ -85,12 +85,22 @@ export default function LobbyPage() {
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`/api/rooms/${code}/poll`);
-        if (!res.ok) return;
+        // TEMP DEBUG: a swallowed non-2xx here is why the 2nd user can be stuck.
+        if (!res.ok) {
+          console.warn("[client lobby poll] non-ok", { code, status: res.status });
+          return;
+        }
         const data: PollResponse = await res.json();
+        console.log("[client lobby poll]", {
+          code,
+          httpStatus: res.status,
+          roomStatus: data.status,
+          memberCount: data.memberCount,
+        });
         setMemberCount(data.memberCount);
         handleRedirect(data.status);
-      } catch {
-        // silently ignore poll errors
+      } catch (err) {
+        console.warn("[client lobby poll] threw", { code, err });
       }
     }, 3000);
 
@@ -116,6 +126,12 @@ export default function LobbyPage() {
       const roomRes = await fetch(`/api/rooms/${code}`);
       if (roomRes.ok) {
         const data: RoomState = await roomRes.json();
+        // TEMP DEBUG: currentMemberId !== null confirms the per-room cookie took.
+        console.log("[client lobby join] after join", {
+          code,
+          currentMemberId: data.currentMemberId,
+          roomStatus: data.status,
+        });
         setRoom(data);
         setMemberCount(data.members.length);
       }

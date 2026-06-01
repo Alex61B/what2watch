@@ -141,6 +141,20 @@ export async function GET(
       }
     }
 
+    // TEMP DEBUG: trace exactly what each member's poll resolves to (host vs. 2nd user).
+    console.log('[poll] response', {
+      roomCode,
+      memberId: member.id,
+      isHost: member.isHost,
+      userId: member.userId,
+      status: room.status,
+      currentPosition: room.currentPosition,
+      queueVersion: room.queueVersion,
+      currentMovieId: currentMovie?.tmdbId ?? null,
+      currentMovieTitle: (currentMovie as { title?: string } | null)?.title ?? null,
+      memberCount,
+    })
+
     return NextResponse.json(
       {
         status: room.status,
