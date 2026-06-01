@@ -35,7 +35,7 @@ export async function POST(
     console.log('[start] env', envReport)
 
     stage = 'session'
-    const sessionToken = await getSessionToken()
+    const sessionToken = await getSessionToken(code)
     if (!sessionToken) {
       console.warn('[start] returning 401', { reason: 'unauthorized_no_session', roomCode })
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

@@ -1,63 +1,63 @@
-# Research — User Profile & Friend Page
+# Research — Fix: second user stuck on room poll (stale cross-room session cookie)
 
-Companion to the implementation plan at `docs/superpowers/plans/2026-05-31-user-profile-and-friends.md`.
+Supersedes the previous cycle's research (user-profile-and-friends, shipped 2026-05-31 — see git history / `docs/superpowers/plans/`).
 
 ## 1. Requirements Summary
 
-Two coupled features for signed-in users:
+Production bug: the second user cannot load a room after joining. Vercel logs for `/api/rooms/OVAL-32/poll`:
 
-- **User Profile** — a hub (`/profile`) linking to Settings, Friends, Watch List, and Seen-Before pages. The Watch List auto-fills when a user votes "Yes" in a room; the Seen-Before list fills on "Already seen it". Both lists are viewable and items removable. Friends: search users, send/accept/decline requests, see accepted friends and pending requests separately.
-- **Friend Page** — for an accepted friend, show the **shared watch list** (intersection of both users' watch lists), **previous sessions together** (rooms both participated in), and per-session **shared "Yes"** movies (movies both voted Yes on in that room).
+```
+[poll] room lookup { roomCode: 'OVAL-32', found: true }
+[poll] returning 404 { reason: 'room_not_found',
+  memberId: '09cc19cf…', memberRoomId: 'c2788d0a…', foundRoomId: '13e466fa…' }
+```
 
-Access control: only signed-in users reach profile/friend features; non-friends cannot view a friend page; anonymous room participants must not expose data.
+The room exists, but the cookie's member belongs to a **different** room. Required outcomes:
+1. Confirm join always (over)writes the session cookie.
+2. Confirm poll validates the cookie member belongs to the requested room.
+3. On `memberRoomId !== foundRoomId`, return a clear 403 / clear the stale cookie instead of a misleading 404 `room_not_found`.
+4. Joining a new room from the same browser must not leave a stale member cookie from an old room.
+5. Add join-route logging: requested roomCode, foundRoomId, created/found memberId, member.roomId, cookie set.
+6. Regression test: join Room A → join Room B → poll Room B succeeds.
+
+Chosen fix (user-selected): **per-room cookie scope** — cookie name `w2w_session_<CODE>`; readers resolve the token for the requested room code.
 
 ## 2. Stack Choices
 
-Leverage existing patterns only — no new dependencies.
-
-- **Auth:** NextAuth 5 JWT sessions. Server side: `await auth()` → `session.user.id`. Client side: `useSession()` (provider already in `app/layout.tsx`).
-- **DB:** Prisma 6 + `@prisma/adapter-pg`. Add three models (`Friendship`, `UserMoviePreference`, `MovieCache`) + two enums.
-- **Logic-in-lib pattern:** Existing code puts testable logic in `lib/` (e.g. `lib/queue.ts`, `lib/match.ts`) with mocked-`@/lib/prisma` Jest tests; route handlers stay thin. New logic follows suit (`lib/preferences.ts`, `lib/friends.ts`, `lib/movie-cache.ts`, `lib/link.ts`).
-- **TMDB metadata:** reuse `getMovieById` from `lib/tmdb.ts`, backed by a new persistent `MovieCache` for list rendering and fallback.
-- **UI:** Tailwind dark theme matching `app/page.tsx`; reuse `StreamingServicePicker`.
-- **Testing:** Jest + ts-jest for lib; `@testing-library/react` for one client component, matching `__tests__/` conventions.
+No new dependencies. Next.js 15 App Router route handlers; `next/headers` `cookies()` for reads; `NextResponse.cookies.set` for writes; Jest (jsdom default, `@jest-environment node` override for route-handler tests). Cookie value stays a random 32-byte hex token mapped 1:1 to `Member.sessionToken` (unique). No Prisma schema change required.
 
 ## 3. Environment Verification
 
-- `prisma/schema.prisma` confirmed: `User` has `id/email/displayName/savedServices/savedFilters/passwordHash`; `Member` has nullable `userId`, `roomId`, `joinedAt`, unique `sessionToken`; `Vote { roomId, memberId, tmdbMovieId, vote, votedAt }`; `WatchedMovie { memberId, tmdbMovieId }`; `Room { code, status, createdAt }`.
-- Auth wiring confirmed in `auth.ts` (Google + Credentials, JWT, `session.user.id` threaded) and `types/next-auth.d.ts`.
-- Two session systems confirmed: room cookie `w2w_session` (`lib/session.ts` / `getSessionToken`) vs NextAuth identity (`auth()`). `/api/auth/link-member` links them best-effort from the landing page only.
-- Existing vote/watched routes (`app/api/rooms/[code]/votes|watched/route.ts`) confirmed as the hook points.
-- Migration tooling: `prisma migrate dev` requires `DIRECT_URL` in `.env.local` (per project memory) and **explicit user approval** (restricted action).
-- `scripts/verify.sh` runs typecheck → lint → jest and writes `.workflow_verified`.
+- **Writers of `w2w_session`:** `app/api/rooms/route.ts:48` (create), `app/api/rooms/[code]/members/route.ts:64` (join). Both already overwrite the cookie — requirement (1) holds today.
+- **Readers of `getSessionToken()` (all no-arg today):** `poll`, `route.ts` GET+PATCH, `votes`, `watched`, `queue`, `start` (all under `[code]`, all destructure `const { code } = await params` *before* the cookie read — safe to pass `code`), plus **`app/api/auth/link-member/route.ts:12`** (auth restricted area).
+- **`link-member` callers** (`app/page.tsx:16`, `app/auth/signin/page.tsx:29`, `app/auth/signup/page.tsx:19`) all POST with **no body** → no room code available there.
+- **Helper:** `lib/session.ts` exports `SESSION_COOKIE_NAME`, `generateSessionToken`, `getSessionToken`, `setSessionCookie` (the last two unused outside lib except getSessionToken). `SESSION_COOKIE_NAME` is asserted in `__tests__/lib/session.test.ts`.
+- **Client flow:** only `setup`/`lobby` join; `lobby`/`vote` poll on an interval and silently swallow non-OK responses. A browser already a member of room A that lands on room B's lobby/vote (deep link, bookmark, back button, second tab) polls B with A's cookie → mismatch → 404.
+- **Verify:** `scripts/verify.sh` runs typecheck → lint → jest, writes `.workflow_verified`.
 
 ## 4. Risks & Edge Cases
 
-- **Identity bridge gap:** a signed-in user who joins via `/api/rooms/[code]/members` gets `Member.userId = null`. Mitigation: `lib/link.ts#resolveMemberUserId` links at vote time via `auth()`; anonymous members return null → no preference written.
-- **Migration drift:** generated migration SQL under `prisma/migrations/` is unplannable by exact path and trips `.workflow_drift`; user runs `advance_state.sh drift-to-plan` in terminal (known issue per project memory).
-- **TMDB unavailability:** movie may be deleted/unreachable → `MovieCache` fallback metadata (`Title unavailable`).
-- **Duplicate prevention:** `@@unique` on `Friendship(requesterId,receiverId)` and `UserMoviePreference(userId,tmdbMovieId,type)`; upserts + `FriendError` codes (DUPLICATE/ALREADY_FRIENDS/SELF).
-- **Non-fatal hooks:** watch-list/seen-before writes wrapped in try/catch so they never break voting.
-- **Access control:** `areFriends` 403 in friend routes; `requireUserId` redirect in pages; unfriend deletes the row → access removed.
-- **Yes/No mismatch:** shared-Yes intersects `vote: true` for both users only.
-- **N+1:** `getSessionsTogether` runs one shared-Yes count per room — acceptable at MVP volume.
+- **Root cause:** a single global `w2w_session` cookie (path `/`) identifies the browser as a member of exactly one room. Poll resolves the member by token alone, then 404s on room-id mismatch. Per-room cookie names eliminate the mismatch (each room has its own cookie) and enable simultaneous multi-room membership.
+- **`link-member` (restricted/auth):** user approved editing it. Callers send no code, so link **all** `w2w_session_*` tokens to the signed-in user (`updateMany … userId: null`). Strictly better; no change to the 3 auth-page callers.
+- **Backward compatibility:** after deploy, browsers holding the old global `w2w_session` cookie read as not-joined (new cookie name). Acceptable — rooms expire in 24h; users simply re-join from the lobby. Old cookie lingers harmlessly until expiry. No data migration. Rollback = revert commit.
+- **Cookie name charset:** codes like `OVAL-32` → `w2w_session_OVAL-32`; hyphen/uppercase are valid cookie-name token chars. Code normalized to uppercase to match URL casing.
+- **Secret logging:** requirement (5) asks to log the Set-Cookie value; log the cookie **name** + a short token prefix only, never the full session secret.
+- **Test env:** route-handler tests need Node env + mocked `@/lib/prisma`, `next/headers`, `@/lib/tmdb`; cookie writes land on the returned `NextResponse` (read back via `res.cookies.get`), not on the `next/headers` jar.
 
 ## 5. Assumptions & Open Questions
 
-- **Assumption:** session/vote history needs **no new tables** — existing `Member.userId` + `Vote` + `Room` cover it. (Spec listed redundant tables; dropped per YAGNI.)
-- **Assumption:** "shared watch list" = intersection of `UserMoviePreference` WATCHLIST rows (equivalent to "movies both said Yes to" since Yes votes populate the watchlist).
-- **Assumption:** streaming-provider metadata in `MovieCache` is deferred ("if available").
-- **Open question (non-blocking):** should declined friend requests be re-sendable? Plan assumes yes (re-opens the row). Revisit if undesired.
-- **Open dependency:** migration requires user approval + `DIRECT_URL` configured.
+- **Assumption:** poll's `room.id !== member.roomId` branch becomes effectively unreachable with per-room cookies but is kept as defense-in-depth (403 `wrong_room` + clear that room's cookie).
+- **Assumption:** path stays `/` (matches the user's selected design exactly); path-scoping per room is a deferred optional hardening.
+- **Assumption:** no Prisma/schema change — `Member.sessionToken` already unique per member.
+- **Open question (non-blocking):** should `vote`/`lobby` redirect to `/setup` on a 401 (no cookie for this room) for better UX? Out of scope for the fix; noted.
 
 ## 6. Out of Scope
 
-- New vote-history / session-member tables (already covered by existing schema).
-- Streaming-provider caching in `MovieCache`.
+- Client UX changes to lobby/vote poll-error handling (beyond what the fix needs).
+- Removing the now-effectively-dead poll mismatch branch (kept as a safety net).
 - `MemberQueue` retirement (tracked separately in project memory).
-- Real-time updates on profile/friend pages (fetch-on-load is sufficient).
-- Notifications for incoming friend requests.
+- Any schema/migration/dependency changes.
 
 ## 7. Readiness Verdict: READY FOR PLANNING
 
-Architecture validated against the live codebase; risks identified with mitigations; the only external dependency is user approval of the Prisma migration. The implementation plan decomposes this into 18 TDD tasks. **READY FOR PLANNING.**
+Root cause confirmed against the live code and the production log; fix approach selected by the user (per-room cookie scope); restricted-area edit (`link-member`) explicitly approved, with a corrected mechanism (link-all) since callers pass no code. Manifest written to `.workflow_plan_files`. **READY FOR PLANNING.**

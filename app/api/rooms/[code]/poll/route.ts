@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { getSessionToken } from '@/lib/session'
+import { getSessionToken, clearSessionCookie } from '@/lib/session'
 import { getMovieById } from '@/lib/tmdb'
 
 export async function GET(
@@ -15,7 +15,7 @@ export async function GET(
     roomCode = code
 
     stage = 'session'
-    const sessionToken = await getSessionToken()
+    const sessionToken = await getSessionToken(code)
     if (!sessionToken) {
       console.warn('[poll] returning 401', { reason: 'unauthorized_no_session', roomCode })
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -39,15 +39,27 @@ export async function GET(
     stage = 'room-lookup'
     const room = await prisma.room.findUnique({ where: { code } })
     console.log('[poll] room lookup', { roomCode, found: !!room })
-    if (!room || room.id !== member.roomId) {
-      console.warn('[poll] returning 404', {
-        reason: 'room_not_found',
+    if (!room) {
+      console.warn('[poll] returning 404', { reason: 'room_not_found', roomCode })
+      return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+    }
+    if (room.id !== member.roomId) {
+      // The session cookie for this room code resolves to a member of a
+      // different room — a stale/forged cookie. Clear it and signal clearly
+      // instead of masquerading as a missing room.
+      console.warn('[poll] returning 403', {
+        reason: 'wrong_room',
         roomCode,
         memberId: member.id,
         memberRoomId: member.roomId,
-        foundRoomId: room?.id ?? null,
+        foundRoomId: room.id,
       })
-      return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+      const res = NextResponse.json(
+        { error: 'This session belongs to a different room', reason: 'wrong_room' },
+        { status: 403 }
+      )
+      clearSessionCookie(res, code)
+      return res
     }
 
     stage = 'etag-check'

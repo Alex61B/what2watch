@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { generateRoomCode } from '@/lib/room-code'
-import { generateSessionToken } from '@/lib/session'
+import { generateSessionToken, setSessionCookie } from '@/lib/session'
 
 export async function POST(request: Request) {
   const body = await request.json()
@@ -45,11 +45,6 @@ export async function POST(request: Request) {
   })
 
   const response = NextResponse.json({ code, memberId: member.id })
-  response.cookies.set('w2w_session', sessionToken, {
-    httpOnly: true,
-    sameSite: 'lax',
-    maxAge: 60 * 60 * 24 * 7,
-    path: '/',
-  })
+  setSessionCookie(response, code, sessionToken)
   return response
 }

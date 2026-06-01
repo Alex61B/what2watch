@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { generateSessionToken } from '@/lib/session'
+import { generateSessionToken, setSessionCookie, sessionCookieName } from '@/lib/session'
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr]
@@ -60,12 +60,16 @@ export async function POST(
     }
   }
 
-  const response = NextResponse.json({ memberId: member.id })
-  response.cookies.set('w2w_session', sessionToken, {
-    httpOnly: true,
-    sameSite: 'lax',
-    maxAge: 60 * 60 * 24 * 7,
-    path: '/',
+  console.log('[join] member created', {
+    roomCode: code,
+    foundRoomId: room.id,
+    memberId: member.id,
+    memberRoomId: member.roomId,
+    cookie: sessionCookieName(code),
+    tokenPrefix: sessionToken.slice(0, 8),
   })
+
+  const response = NextResponse.json({ memberId: member.id })
+  setSessionCookie(response, code, sessionToken)
   return response
 }

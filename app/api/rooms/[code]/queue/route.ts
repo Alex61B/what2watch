@@ -15,7 +15,7 @@ export async function GET(
     roomCode = code
 
     stage = 'session'
-    const sessionToken = await getSessionToken()
+    const sessionToken = await getSessionToken(code)
     if (!sessionToken) {
       console.warn('[queue-route] returning 401', { reason: 'unauthorized_no_session', roomCode })
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
