@@ -1,52 +1,50 @@
-# Research — Group A: UI Polish (home button, member visibility, Tinder swipe)
+# Research — Group B: Room naming
 
-First of four refinement cycles. Quick UI wins only; no schema change, no new dependency.
-Design spec: `docs/superpowers/specs/2026-06-01-group-a-ui-polish-design.md`.
+Second refinement cycle. Host names the room at creation; the name is shown in the
+lobby, the vote header, and at the end of a session. Optional, editable by the host.
+Design spec: `docs/superpowers/specs/2026-06-01-group-b-room-naming-design.md`.
 
 ## 1. Requirements Summary
 
-Four user-requested UI refinements:
-
-- **A1 (#5)** — Add a **Home** button to the profile screens so users can leave the profile area back to `/`. Today `app/profile/*` pages have no navigation out.
-- **A2 (#2)** — Show the **member count/list on the room setup page** so the host can see who has joined before starting. `setup/page.tsx` fetches `members` on load but never renders them; it does not poll.
-- **A3 (#3)** — Show a **participant roster to everyone during voting**. `MemberList` only renders in the lobby; the vote page shows no roster, and the poll response carries `memberCount` but not the member list.
-- **A4 (#1)** — Make the swipe **Tinder-like**: card follows the finger/mouse, rotates, shows LIKE/NOPE overlays, springs back below a threshold and flies off past it. Today `VotingCard` only detects a >50px swipe then plays a fixed fly-off via page-level `swipeDir`.
+- Host can give the room an **optional name** when creating it (Create Room form), alongside their display name.
+- The name is **editable** by the host afterwards (on the setup page).
+- The name is shown to everyone in the **lobby** (under the room code), the **vote header**, and at the **end of session** (match + done screens).
+- When no name is set, the name is simply omitted (no fallback text required).
 
 ## 2. Stack Choices
 
-- **No new dependency.** `package.json` has no gesture/animation library, and project rules forbid adding packages without explicit approval. The swipe is hand-rolled with **Pointer Events** + CSS transforms (touch + mouse).
-- Reuse `components/MemberList.tsx` for the setup roster (A2).
-- Reuse the existing poll loop on the vote page (A3) and add a 3s poll to setup (A2), matching the lobby/vote polling pattern.
-- New presentational `components/ProfileHeader.tsx` (title + Home link), server-component safe.
+- Add a nullable `name String?` to the Prisma `Room` model — additive, backward compatible. One migration `add_room_name`.
+- Reuse existing endpoints: room creation (`POST /api/rooms`), host-gated room update (`PATCH /api/rooms/[code]`), room read (`GET /api/rooms/[code]`), and poll (`GET .../poll`) — each gains `name`.
+- No new dependency. UI reuses existing form/input patterns (the setup page already has optimistic PATCH helpers).
 
 ## 3. Environment Verification
 
-- Poll route `app/api/rooms/[code]/poll/route.ts` returns `{ status, memberCount, matchedMovie, rejectedMovieIds, watchedFilter, currentPosition, queueVersion, currentMovie, isHost }` and an ETag/304 short-circuit on `queueVersion`. Adding a `members` array is one extra `prisma.member.findMany` after the 304 check — does not change ETag semantics.
-- `Member` model has `displayName`, `isHost`, `joinedAt`, `leftAt` — sufficient for the roster (`where leftAt: null`, `orderBy joinedAt asc`).
-- `setup/page.tsx` already holds `members` in `RoomState`; rendering + a poll interval is additive.
-- `VotingCard` is consumed only by `vote/page.tsx`; its `onVote(vote)` + `disabled` contract and YES/NO buttons are covered by `__tests__/components/VotingCard.test.tsx` (synchronous `onVote`). The rewrite preserves that contract.
-- `npm run typecheck`, `npm run lint`, `npm test` are the verification commands (`scripts/verify.sh`).
+- `POST /api/rooms` creates the room + host member in a transaction; adding `name` to `room.create` data is trivial.
+- `PATCH /api/rooms/[code]` is already host-gated and builds `updateData` from whitelisted fields; add `name` (string) to the whitelist.
+- `GET /api/rooms/[code]` returns room fields; add `name`. `GET .../poll` returns room-derived fields; add `name`.
+- `lobby/page.tsx` reads `GET /api/rooms/[code]` (has `name`) and polls; `vote/page.tsx` and `match/page.tsx` read `GET .../poll` (will have `name`); `done/page.tsx` currently fetches nothing — it will fetch `GET /api/rooms/[code]` once for the name.
+- **Migration constraints (confirmed):** `prisma migrate` is not in the read-only allowlist, so it prompts for approval (user chose: I run it, they approve). It needs `DIRECT_URL` in `.env.local` (see [reference-supabase-direct-url]). Generated migration SQL is a new file under `prisma/migrations/` → would normally trip `.workflow_drift` (see [feedback-workflow-drift-recovery]). **Mitigation:** run the migrate command and append the generated `migration.sql` path to `.workflow_plan_files` in the *same* Bash invocation, so `post_tool_use`'s drift check (which runs after the command) sees the file already planned.
 
 ## 4. Risks & Edge Cases
 
-- **Test breakage (A4):** existing tests expect `onVote` to fire synchronously on button click. Mitigation: buttons call `onVote` immediately and only set the exit-animation state; the callback is never deferred behind the animation.
-- **jsdom can't simulate pointer geometry:** drag distance/threshold behavior isn't reliably unit-testable. Mitigation: keep button-based tests as the unit contract; verify drag manually.
-- **Poll payload growth (A3):** `members` adds a small array per poll (1.5s interval on vote). Acceptable for room-sized member counts; bounded by `leftAt: null`.
-- **Pointer capture / stuck drag:** must reset `dragX` and release capture on `onPointerUp`/`onPointerCancel` to avoid a card stuck mid-drag. Drag disabled when `disabled` is true (submitting/locked).
-- **Setup polling lifecycle:** interval must be cleared on unmount to avoid leaks/duplicate polls, matching lobby/vote.
+- **Migration drift handoff** — mitigated by the same-command manifest append (above). If that fails, fall back to the documented `advance_state.sh drift-to-plan` recovery (user runs it in their terminal).
+- **Interactive prisma prompt** — `migrate dev` could prompt if it detects DB drift; for a nullable additive column it should apply non-interactively. If it errors (e.g. missing `DIRECT_URL`), surface and stop.
+- **Empty/whitespace name** — trim; treat empty as "no name" (store null) so the UI omit-logic is consistent.
+- **Name length** — cap at a reasonable length (e.g. 60 chars) in the API to avoid layout/abuse issues.
+- **Stale client types** — `room.name` only typechecks after `prisma generate` (run by `migrate dev`); migrate must run before TEST/typecheck.
 
 ## 5. Assumptions & Open Questions
 
-- Assume the host is a normal `Member` row (current member) on the setup page — confirmed by the create-room transaction (`isHost: true`).
-- Assume "N watching" should reflect active members (`leftAt: null`), not lifetime joiners.
-- No open questions blocking planning: scope, swipe richness (full drag + LIKE/NOPE overlay), roster presentation (collapsible "N watching" chip), and live-vs-static (live on both) were confirmed with the user.
+- Assume no per-name uniqueness or validation beyond trim + length cap.
+- Assume the vote header has room for a short name beside "What2Watch" (truncate if long).
+- No open questions: required/optional (optional), placement (lobby + vote header + end), and editability (editable on setup) were confirmed with the user.
 
 ## 6. Out of Scope
 
-- **B** room naming, **C** real TMDB `watch/providers`, **D** join-mid-session with host approval — each a separate later cycle.
-- Any schema/migration or dependency change.
-- Removing the temporary debug instrumentation from the prior cycle (separate concern).
+- **C** real TMDB watch/providers, **D** join-with-approval — later cycles.
+- Room name search/history, uniqueness, or moderation.
+- Any change to the swipe/roster work shipped in Group A.
 
 ## 7. Readiness Verdict: READY FOR PLANNING
 
-Scope is four additive, no-schema UI changes with a clear file list and a test strategy that preserves the existing `VotingCard` contract. **READY FOR PLANNING.**
+Single additive nullable column plus straightforward read/write plumbing across four endpoints and five screens, with a concrete migration-drift mitigation. **READY FOR PLANNING.**

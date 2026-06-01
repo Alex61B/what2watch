@@ -45,6 +45,7 @@ export async function GET(
 
   return NextResponse.json({
     code: room.code,
+    name: room.name,
     status: room.status,
     streamingServices: room.streamingServices,
     filters: room.filters,
@@ -79,6 +80,10 @@ export async function PATCH(
   if (Array.isArray(body.streamingServices)) updateData.streamingServices = body.streamingServices
   if (body.filters !== undefined) updateData.filters = body.filters
   if (typeof body.watchedFilter === 'boolean') updateData.watchedFilter = body.watchedFilter
+  if (typeof body.name === 'string') {
+    const trimmed = body.name.trim()
+    updateData.name = trimmed ? trimmed.slice(0, 60) : null
+  }
 
   const updated = await prisma.room.update({
     where: { id: room.id },
@@ -86,6 +91,7 @@ export async function PATCH(
   })
 
   return NextResponse.json({
+    name: updated.name,
     streamingServices: updated.streamingServices,
     filters: updated.filters,
     watchedFilter: updated.watchedFilter,

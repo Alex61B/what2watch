@@ -3,9 +3,18 @@ import { prisma } from '@/lib/prisma'
 import { generateRoomCode } from '@/lib/room-code'
 import { generateSessionToken, setSessionCookie } from '@/lib/session'
 
+// Normalize an optional free-text room name: trim, empty → null, cap length.
+function normalizeRoomName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  return trimmed.slice(0, 60)
+}
+
 export async function POST(request: Request) {
   const body = await request.json()
   const displayName = body?.displayName
+  const name = normalizeRoomName(body?.name)
 
   if (!displayName?.trim()) {
     return NextResponse.json({ error: 'displayName is required' }, { status: 400 })
@@ -30,6 +39,7 @@ export async function POST(request: Request) {
     const room = await tx.room.create({
       data: {
         code,
+        name,
         streamingServices: [],
         expiresAt,
       },

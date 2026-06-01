@@ -29,6 +29,7 @@ model User {
 model Room {
   id                String      @id @default(uuid())
   code              String      @unique
+  name              String?
   streamingServices String[]
   filters           Json?
   status            RoomStatus  @default(LOBBY)

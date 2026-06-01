@@ -165,6 +165,7 @@ export async function GET(
     return NextResponse.json(
       {
         status: room.status,
+        name: room.name,
         memberCount,
         members,
         matchedMovie,
