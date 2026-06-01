@@ -30,12 +30,15 @@ export async function POST(
   }
 
   const sessionToken = generateSessionToken()
+  // Joining mid-session (VOTING) requires host approval; lobby joins are auto-approved.
+  const approved = room.status !== 'VOTING'
   const member = await prisma.member.create({
     data: {
       roomId: room.id,
       displayName: displayName.trim(),
       sessionToken,
       isHost: false,
+      approved,
     },
   })
 

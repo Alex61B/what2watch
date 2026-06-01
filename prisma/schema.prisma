@@ -70,6 +70,7 @@ model Member {
   displayName   String
   sessionToken  String         @unique
   isHost        Boolean        @default(false)
+  approved      Boolean        @default(true)
   joinedAt      DateTime       @default(now())
   lastSeenAt    DateTime       @default(now())
   leftAt        DateTime?

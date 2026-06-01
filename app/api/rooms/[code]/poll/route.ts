@@ -63,8 +63,12 @@ export async function GET(
     }
 
     stage = 'etag-check'
+    // The host and not-yet-approved members must always get a full response:
+    // membership/approval changes don't bump queueVersion, so the 304 fast-path
+    // would otherwise hide pending requests (host) or the approval flip (joiner).
+    const canShortCircuit = member.approved && !member.isHost
     const ifNoneMatch = request.headers.get('if-none-match')
-    if (ifNoneMatch && ifNoneMatch.replace(/"/g, '') === String(room.queueVersion)) {
+    if (canShortCircuit && ifNoneMatch && ifNoneMatch.replace(/"/g, '') === String(room.queueVersion)) {
       await prisma.member.update({ where: { id: member.id }, data: { lastSeenAt: new Date() } })
       console.log('[poll] 304', { roomId: room.id, queueVersion: room.queueVersion, memberId: member.id })
       return new NextResponse(null, {
@@ -78,15 +82,26 @@ export async function GET(
 
     stage = 'member-count'
     const memberCount = await prisma.member.count({
-      where: { roomId: room.id, leftAt: null },
+      where: { roomId: room.id, leftAt: null, approved: true },
     })
 
     stage = 'member-list'
     const members = await prisma.member.findMany({
-      where: { roomId: room.id, leftAt: null },
+      where: { roomId: room.id, leftAt: null, approved: true },
       select: { id: true, displayName: true, isHost: true },
       orderBy: { joinedAt: 'asc' },
     })
+
+    stage = 'pending-members'
+    // Late joiners (joined during VOTING) awaiting the host's decision.
+    const pendingMembers = await prisma.member.findMany({
+      where: { roomId: room.id, leftAt: null, approved: false },
+      select: { id: true, displayName: true },
+      orderBy: { joinedAt: 'asc' },
+    })
+    // Flags for the requesting member's own approval state.
+    const pendingApproval = !member.approved && !member.leftAt
+    const notAdmitted = !member.approved && !!member.leftAt
 
     stage = 'matched-movie'
     let matchedMovie = null
@@ -178,6 +193,9 @@ export async function GET(
         name: room.name,
         memberCount,
         members,
+        pendingMembers,
+        pendingApproval,
+        notAdmitted,
         matchedMovie,
         rejectedMovieIds,
         watchedFilter: room.watchedFilter,

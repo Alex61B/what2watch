@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
+import Link from "next/link";
 import VotingCard from "@/components/VotingCard";
 import DrainedScreen from "@/components/DrainedScreen";
 
@@ -24,11 +25,19 @@ interface RoomMember {
   isHost: boolean;
 }
 
+interface PendingMember {
+  id: string;
+  displayName: string;
+}
+
 interface PollResponse {
   status: string;
   name: string | null;
   memberCount: number;
   members: RoomMember[];
+  pendingMembers: PendingMember[];
+  pendingApproval: boolean;
+  notAdmitted: boolean;
   matchedMovie: unknown;
   rejectedMovieIds?: string[];
   watchedFilter?: boolean;
@@ -54,6 +63,7 @@ export default function VotePage() {
   const [submitting, setSubmitting] = useState(false);
   const [markingWatched, setMarkingWatched] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
+  const [approvingId, setApprovingId] = useState<string | null>(null);
   // Bumped after each resolved vote so the VotingCard remounts fresh and centered,
   // even when the room stays on the same movie (a YES with no match yet).
   const [cardKey, setCardKey] = useState(0);
@@ -80,7 +90,10 @@ export default function VotePage() {
         return;
       }
       const data: PollResponse = await res.json();
-      lastVersionRef.current = data.queueVersion;
+      // While waiting on host approval (or after rejection) the queueVersion is
+      // stable but our view still flips, so don't gate those polls with an ETag.
+      lastVersionRef.current =
+        data.pendingApproval || data.notAdmitted ? null : data.queueVersion;
       setState(data);
       if (data.status === "MATCHED") {
         stoppedRef.current = true;
@@ -166,10 +179,58 @@ export default function VotePage() {
     }
   }, [markingWatched, state, code, pollOnce]);
 
+  const handleApproval = useCallback(
+    async (memberId: string, action: "accept" | "reject") => {
+      if (approvingId) return;
+      setApprovingId(memberId);
+      try {
+        await fetch(`/api/rooms/${code}/approvals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ memberId, action }),
+        });
+        await pollOnce();
+      } finally {
+        setApprovingId(null);
+      }
+    },
+    [approvingId, code, pollOnce]
+  );
+
   if (state === undefined) {
     return (
       <main className="min-h-screen flex items-center justify-center bg-gray-950 text-white px-4">
         <p className="text-gray-400">Loading movies…</p>
+      </main>
+    );
+  }
+
+  if (state?.notAdmitted) {
+    return (
+      <main className="min-h-screen flex flex-col items-center justify-center bg-gray-950 text-white px-4">
+        <div className="w-full max-w-sm text-center space-y-4">
+          <h1 className="text-2xl font-bold text-gray-100">Not admitted</h1>
+          <p className="text-gray-400">The host didn&apos;t admit you to this room.</p>
+          <Link
+            href="/"
+            className="inline-block rounded-xl bg-indigo-600 hover:bg-indigo-500 px-6 py-3 text-base font-semibold transition-colors"
+          >
+            Back to home
+          </Link>
+        </div>
+      </main>
+    );
+  }
+
+  if (state?.pendingApproval) {
+    return (
+      <main className="min-h-screen flex flex-col items-center justify-center bg-gray-950 text-white px-4">
+        <div className="w-full max-w-sm text-center space-y-3">
+          <h1 className="text-2xl font-bold text-gray-100">Waiting for the host…</h1>
+          <p className="text-gray-400">
+            You&apos;ll join the voting as soon as the host approves you.
+          </p>
+        </div>
       </main>
     );
   }
@@ -203,6 +264,40 @@ export default function VotePage() {
             Position {state.currentPosition + 1}
           </span>
         </div>
+
+        {/* Host-only: pending join requests */}
+        {state.isHost && (state.pendingMembers?.length ?? 0) > 0 && (
+          <div className="space-y-2 rounded-xl border border-indigo-700 bg-indigo-950/40 p-3">
+            <p className="text-sm font-medium text-indigo-200">
+              Join request{state.pendingMembers.length > 1 ? "s" : ""}
+            </p>
+            <ul className="space-y-2">
+              {state.pendingMembers.map((p) => (
+                <li key={p.id} className="flex items-center justify-between gap-2">
+                  <span className="truncate text-sm text-gray-200">{p.displayName}</span>
+                  <span className="flex shrink-0 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleApproval(p.id, "accept")}
+                      disabled={approvingId !== null}
+                      className="rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 px-3 py-1.5 text-xs font-semibold transition-colors"
+                    >
+                      Accept
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleApproval(p.id, "reject")}
+                      disabled={approvingId !== null}
+                      className="rounded-lg bg-gray-700 hover:bg-gray-600 disabled:opacity-40 px-3 py-1.5 text-xs font-semibold transition-colors"
+                    >
+                      Reject
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* Live participant roster — collapsible to stay out of the way. */}
         <div className="rounded-xl bg-gray-900">

@@ -33,6 +33,15 @@ export async function POST(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
+    if (member.leftAt || !member.approved) {
+      console.warn('[votes] returning 403', {
+        reason: member.leftAt ? 'member_left' : 'member_not_approved',
+        roomCode,
+        memberId: member.id,
+      })
+      return NextResponse.json({ error: 'You are not an approved member of this room' }, { status: 403 })
+    }
+
     console.log('[votes] request', {
       roomCode,
       memberId: member.id,
