@@ -18,9 +18,16 @@ interface Movie {
   streamingService: string;
 }
 
+interface RoomMember {
+  id: string;
+  displayName: string;
+  isHost: boolean;
+}
+
 interface PollResponse {
   status: string;
   memberCount: number;
+  members: RoomMember[];
   matchedMovie: unknown;
   rejectedMovieIds?: string[];
   watchedFilter?: boolean;
@@ -32,6 +39,10 @@ interface PollResponse {
 
 const POLL_INTERVAL_MS = 1500;
 const VOTE_LOCK_TIMEOUT_MS = 5000;
+// Minimum time the fly-off animation is allowed to play before the next card mounts.
+const EXIT_ANIM_MS = 300;
+
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 export default function VotePage() {
   const router = useRouter();
@@ -40,8 +51,11 @@ export default function VotePage() {
 
   const [state, setState] = useState<PollResponse | null | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
-  const [swipeDir, setSwipeDir] = useState<"left" | "right" | null>(null);
   const [markingWatched, setMarkingWatched] = useState(false);
+  const [rosterOpen, setRosterOpen] = useState(false);
+  // Bumped after each resolved vote so the VotingCard remounts fresh and centered,
+  // even when the room stays on the same movie (a YES with no match yet).
+  const [cardKey, setCardKey] = useState(0);
 
   const stoppedRef = useRef(false);
   const lastVersionRef = useRef<number | null>(null);
@@ -60,21 +74,11 @@ export default function VotePage() {
       }
       const res = await fetch(`/api/rooms/${code}/poll`, { headers });
       if (res.status === 304) return;
-      // TEMP DEBUG: a swallowed non-2xx here strands the 2nd user on the waiting screen.
       if (!res.ok) {
         console.warn("[client vote poll] non-ok", { code, status: res.status });
         return;
       }
       const data: PollResponse = await res.json();
-      console.log("[client vote poll]", {
-        code,
-        httpStatus: res.status,
-        roomStatus: data.status,
-        currentMovieId: data.currentMovie?.tmdbId ?? null,
-        currentMovieTitle: data.currentMovie?.title ?? null,
-        currentPosition: data.currentPosition,
-        queueVersion: data.queueVersion,
-      });
       lastVersionRef.current = data.queueVersion;
       setState(data);
       if (data.status === "MATCHED") {
@@ -107,18 +111,6 @@ export default function VotePage() {
     };
   }, [pollOnce]);
 
-  const animateAndAdvance = useCallback(
-    async (direction: "left" | "right", action: () => Promise<void>) => {
-      setSwipeDir(direction);
-      await Promise.all([
-        action(),
-        new Promise<void>(resolve => setTimeout(resolve, 300)),
-      ]);
-      setSwipeDir(null);
-    },
-    []
-  );
-
   const handleVote = useCallback(
     async (vote: boolean) => {
       if (submittingRef.current || !state?.currentMovie) return;
@@ -128,7 +120,7 @@ export default function VotePage() {
       const lockTimeout = setTimeout(() => setSubmitting(false), VOTE_LOCK_TIMEOUT_MS);
 
       try {
-        await animateAndAdvance(vote ? "right" : "left", async () => {
+        const submit = (async () => {
           const res = await fetch(`/api/rooms/${code}/votes`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -143,13 +135,16 @@ export default function VotePage() {
             }
           }
           await pollOnce();
-        });
+        })();
+        // Let the card's fly-off animation play before remounting the next card.
+        await Promise.all([submit, sleep(EXIT_ANIM_MS)]);
       } finally {
         clearTimeout(lockTimeout);
         setSubmitting(false);
+        if (!stoppedRef.current) setCardKey(k => k + 1);
       }
     },
-    [state, code, router, animateAndAdvance, pollOnce]
+    [state, code, router, pollOnce]
   );
 
   const handleMarkWatched = useCallback(async () => {
@@ -158,18 +153,17 @@ export default function VotePage() {
 
     setMarkingWatched(true);
     try {
-      await animateAndAdvance("left", async () => {
-        await fetch(`/api/rooms/${code}/watched`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tmdbMovieId }),
-        });
-        await pollOnce();
+      await fetch(`/api/rooms/${code}/watched`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tmdbMovieId }),
       });
+      await pollOnce();
     } finally {
       setMarkingWatched(false);
+      if (!stoppedRef.current) setCardKey(k => k + 1);
     }
-  }, [markingWatched, state, code, animateAndAdvance, pollOnce]);
+  }, [markingWatched, state, code, pollOnce]);
 
   if (state === undefined) {
     return (
@@ -191,6 +185,9 @@ export default function VotePage() {
     );
   }
 
+  const members = state.members ?? [];
+  const watching = members.length || state.memberCount;
+
   return (
     <main className="min-h-screen bg-gray-950 text-white px-4 py-8">
       <div className="w-full max-w-sm mx-auto space-y-4">
@@ -200,30 +197,40 @@ export default function VotePage() {
             Position {state.currentPosition + 1}
           </span>
         </div>
+
+        {/* Live participant roster — collapsible to stay out of the way. */}
+        <div className="rounded-xl bg-gray-900">
+          <button
+            type="button"
+            onClick={() => setRosterOpen(o => !o)}
+            aria-expanded={rosterOpen}
+            className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-gray-300 hover:text-white transition-colors"
+          >
+            <span className="font-medium">{watching} watching</span>
+            <span aria-hidden className="text-gray-500">{rosterOpen ? "▲" : "▼"}</span>
+          </button>
+          {rosterOpen && members.length > 0 && (
+            <ul className="space-y-1 px-4 pb-3">
+              {members.map(m => (
+                <li key={m.id} className="text-sm text-gray-400">
+                  {m.displayName}
+                  {m.isHost && " (Host)"}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
         {state.watchedFilter && (
           <p className="text-xs text-indigo-400">Watched filter active</p>
         )}
 
-        <div
-          className={submitting || markingWatched ? "pointer-events-none" : ""}
-          style={{
-            transform:
-              swipeDir === "left"
-                ? "translateX(-120%) rotate(-10deg)"
-                : swipeDir === "right"
-                ? "translateX(120%) rotate(10deg)"
-                : "none",
-            opacity: swipeDir ? 0 : 1,
-            transition: "transform 0.3s ease, opacity 0.3s ease",
-          }}
-        >
-          <VotingCard
-            key={state.queueVersion}
-            movie={state.currentMovie}
-            onVote={handleVote}
-            disabled={submitting}
-          />
-        </div>
+        <VotingCard
+          key={cardKey}
+          movie={state.currentMovie}
+          onVote={handleVote}
+          disabled={submitting}
+        />
 
         <button
           type="button"

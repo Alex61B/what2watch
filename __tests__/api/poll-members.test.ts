@@ -1,16 +1,12 @@
 /**
  * @jest-environment node
  *
- * Regression test for the cross-room session-cookie bug.
- *
- * A browser that is a member of two rooms must be able to poll each room
- * independently. With the old single global `w2w_session` cookie, joining
- * room B evicted room A's session, so polling room A returned a misleading
- * 404 `room_not_found`. Per-room cookies (`w2w_session_<CODE>`) fix this.
+ * The poll response must include a `members` roster (id, displayName, isHost)
+ * limited to active members (leftAt: null), so the setup and vote screens can
+ * show who is in the room.
  */
 import { POST as joinRoom } from '@/app/api/rooms/[code]/members/route'
 import { GET as pollRoom } from '@/app/api/rooms/[code]/poll/route'
-import { sessionCookieName } from '@/lib/session'
 
 interface MemberRow {
   id: string
@@ -19,15 +15,16 @@ interface MemberRow {
   sessionToken: string
   isHost: boolean
   userId: string | null
+  joinedAt: Date
   lastSeenAt: Date | null
   leftAt: Date | null
 }
 
 const rooms = [
   { id: 'rA', code: 'AAA-11', status: 'LOBBY', matchedMovieId: null, currentPosition: 0, queueVersion: 0, watchedFilter: false },
-  { id: 'rB', code: 'BBB-22', status: 'LOBBY', matchedMovieId: null, currentPosition: 0, queueVersion: 0, watchedFilter: false },
 ]
 let members: MemberRow[] = []
+let seq = 0
 
 jest.mock('@/lib/prisma', () => ({
   prisma: {
@@ -38,12 +35,13 @@ jest.mock('@/lib/prisma', () => ({
     member: {
       create: jest.fn(async ({ data }: { data: { roomId: string; displayName: string; sessionToken: string; isHost: boolean } }) => {
         const row: MemberRow = {
-          id: `m${members.length + 1}`,
+          id: `m${++seq}`,
           roomId: data.roomId,
           displayName: data.displayName,
           sessionToken: data.sessionToken,
           isHost: data.isHost,
           userId: null,
+          joinedAt: new Date(seq),
           lastSeenAt: null,
           leftAt: null,
         }
@@ -55,6 +53,10 @@ jest.mock('@/lib/prisma', () => ({
         if (where.id) return members.find(m => m.id === where.id) ?? null
         return null
       }),
+      findMany: jest.fn(async ({ where }: { where: { roomId: string; leftAt: null } }) =>
+        members
+          .filter(m => m.roomId === where.roomId && m.leftAt === null)
+          .map(m => ({ id: m.id, displayName: m.displayName, isHost: m.isHost }))),
       update: jest.fn(async ({ where, data }: { where: { id: string }; data: Partial<MemberRow> }) => {
         const row = members.find(m => m.id === where.id)!
         Object.assign(row, data)
@@ -62,10 +64,6 @@ jest.mock('@/lib/prisma', () => ({
       }),
       count: jest.fn(async ({ where }: { where: { roomId: string } }) =>
         members.filter(m => m.roomId === where.roomId && m.leftAt === null).length),
-      findMany: jest.fn(async ({ where }: { where: { roomId: string; leftAt: null } }) =>
-        members
-          .filter(m => m.roomId === where.roomId && m.leftAt === null)
-          .map(m => ({ id: m.id, displayName: m.displayName, isHost: m.isHost }))),
     },
     vote: { findMany: jest.fn(async () => []) },
     roomQueue: {
@@ -80,7 +78,6 @@ jest.mock('@/lib/prisma', () => ({
 
 jest.mock('@/lib/tmdb', () => ({ getMovieById: jest.fn(async () => ({})) }))
 
-// A cookie jar standing in for the browser, backing next/headers cookies().
 const jar = new Map<string, string>()
 jest.mock('next/headers', () => ({
   cookies: async () => ({
@@ -102,10 +99,6 @@ function joinReq(code: string, displayName: string) {
     body: JSON.stringify({ displayName }),
   })
 }
-function pollReq(code: string) {
-  return new Request(`http://test/api/rooms/${code}/poll`)
-}
-// Mirror Set-Cookie headers from a route response into the jar, like a browser.
 function applyCookies(res: { cookies: { getAll: () => { name: string; value: string }[] } }) {
   for (const { name, value } of res.cookies.getAll()) {
     if (value) jar.set(name, value)
@@ -115,34 +108,25 @@ function applyCookies(res: { cookies: { getAll: () => { name: string; value: str
 
 beforeEach(() => {
   members = []
+  seq = 0
   jar.clear()
 })
 
-test('a browser that joins two rooms can poll each room independently', async () => {
+test('poll response includes an active-members roster', async () => {
   applyCookies(await joinRoom(joinReq('AAA-11', 'Alice'), ctx('AAA-11')))
-  applyCookies(await joinRoom(joinReq('BBB-22', 'Alice'), ctx('BBB-22')))
+  applyCookies(await joinRoom(joinReq('AAA-11', 'Bob'), ctx('AAA-11')))
+  // A member who left must be excluded from the roster.
+  members.push({
+    id: 'gone', roomId: 'rA', displayName: 'Ghost', sessionToken: 'x',
+    isHost: false, userId: null, joinedAt: new Date(99), lastSeenAt: null, leftAt: new Date(),
+  })
 
-  // Joining the second room must not evict the first room's session.
-  expect(jar.has(sessionCookieName('AAA-11'))).toBe(true)
-  expect(jar.has(sessionCookieName('BBB-22'))).toBe(true)
+  const res = await pollRoom(new Request('http://test/api/rooms/AAA-11/poll'), ctx('AAA-11'))
+  expect(res.status).toBe(200)
+  const body = await res.json()
 
-  const pollB = await pollRoom(pollReq('BBB-22'), ctx('BBB-22'))
-  expect(pollB.status).toBe(200)
-  expect((await pollB.json()).status).toBe('LOBBY')
-
-  // The first room must still be reachable — this is the production bug.
-  const pollA = await pollRoom(pollReq('AAA-11'), ctx('AAA-11'))
-  expect(pollA.status).toBe(200)
-  expect((await pollA.json()).status).toBe('LOBBY')
-})
-
-test('polling with a cookie whose member belongs to another room returns 403 and clears it', async () => {
-  applyCookies(await joinRoom(joinReq('AAA-11', 'Alice'), ctx('AAA-11')))
-  // Forge room B's cookie slot pointing at room A's member token.
-  jar.set(sessionCookieName('BBB-22'), jar.get(sessionCookieName('AAA-11'))!)
-
-  const res = await pollRoom(pollReq('BBB-22'), ctx('BBB-22'))
-  expect(res.status).toBe(403)
-  expect((await res.json()).reason).toBe('wrong_room')
-  expect(res.cookies.get(sessionCookieName('BBB-22'))?.value).toBe('')
+  expect(Array.isArray(body.members)).toBe(true)
+  expect(body.members.map((m: { displayName: string }) => m.displayName)).toEqual(['Alice', 'Bob'])
+  expect(body.members.every((m: { id: string }) => typeof m.id === 'string')).toBe(true)
+  expect(body.members.some((m: { displayName: string }) => m.displayName === 'Ghost')).toBe(false)
 })

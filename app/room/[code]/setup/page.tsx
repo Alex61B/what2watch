@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 import StreamingServicePicker from "@/components/StreamingServicePicker";
+import MemberList from "@/components/MemberList";
 import { ServiceId, TMDB_GENRES } from "@/lib/tmdb";
 
 interface RoomFilters {
@@ -25,6 +26,13 @@ interface RoomState {
   watchedFilter: boolean;
   members: RoomMember[];
   isCurrentUserHost: boolean;
+  currentMemberId: string | null;
+}
+
+interface SetupPollResponse {
+  status: string;
+  members?: RoomMember[];
+  memberCount: number;
 }
 
 export default function SetupPage() {
@@ -34,6 +42,7 @@ export default function SetupPage() {
 
   const [room, setRoom] = useState<RoomState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [members, setMembers] = useState<RoomMember[]>([]);
 
   // Local copies of mutable fields
   const [services, setServices] = useState<ServiceId[]>([]);
@@ -82,6 +91,7 @@ export default function SetupPage() {
         }
 
         setRoom(data);
+        setMembers(data.members ?? []);
         setServices(data.streamingServices ?? []);
         setWatchedFilter(data.watchedFilter ?? false);
         if (data.filters) {
@@ -128,6 +138,24 @@ export default function SetupPage() {
       }
     }
     loadRoom();
+  }, [code, router]);
+
+  // Live member roster — poll so the host sees people arrive before starting.
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/rooms/${code}/poll`);
+        if (!res.ok) return;
+        const data: SetupPollResponse = await res.json();
+        if (Array.isArray(data.members)) setMembers(data.members);
+        if (data.status === "VOTING") router.replace(`/room/${code}/vote`);
+        else if (data.status === "MATCHED") router.replace(`/room/${code}/match`);
+        else if (data.status === "DONE") router.replace(`/room/${code}/done`);
+      } catch {
+        // best-effort; next tick retries
+      }
+    }, 3000);
+    return () => clearInterval(interval);
   }, [code, router]);
 
   // Patch streaming services
@@ -277,6 +305,14 @@ export default function SetupPage() {
             <span className="font-mono font-semibold text-indigo-400">{code}</span>
           </p>
         </div>
+
+        {/* Members — live count so the host sees who has joined */}
+        <section className="space-y-2">
+          <p className="text-xs uppercase tracking-widest text-gray-500 font-semibold">
+            Members · {members.length}
+          </p>
+          <MemberList members={members} currentMemberId={room.currentMemberId ?? ""} />
+        </section>
 
         {/* Streaming services */}
         <section className="bg-gray-900 rounded-2xl p-6 space-y-4">
