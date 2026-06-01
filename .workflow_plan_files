@@ -1,12 +1,6 @@
-prisma/schema.prisma
-app/api/rooms/route.ts
-app/api/rooms/[code]/route.ts
+lib/tmdb.ts
 app/api/rooms/[code]/poll/route.ts
-app/page.tsx
-app/room/[code]/setup/page.tsx
-app/room/[code]/lobby/page.tsx
-app/room/[code]/vote/page.tsx
+components/MatchCelebration.tsx
 app/room/[code]/match/page.tsx
-app/room/[code]/done/page.tsx
-__tests__/api/room-name.test.ts
-prisma/migrations/20260601195707_add_room_name/migration.sql
+__tests__/lib/tmdb.test.ts
+__tests__/components/MatchCelebration.test.tsx

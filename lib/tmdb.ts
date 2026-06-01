@@ -1,5 +1,6 @@
 const TMDB_BASE = 'https://api.themoviedb.org/3'
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w500'
+const TMDB_LOGO_BASE = 'https://image.tmdb.org/t/p/w92'
 
 export const TMDB_GENRES = [
   { id: 28,    name: 'Action' },
@@ -45,6 +46,16 @@ export interface DiscoverFilters {
   maxRuntime?: number
   minRating?: number
   maxRating?: number
+}
+
+export interface WatchProvider {
+  name: string
+  logoUrl: string
+}
+
+export interface WatchProviders {
+  providers: WatchProvider[]
+  link: string | null
 }
 
 // In-memory cache with 1-hour TTL
@@ -140,4 +151,49 @@ export async function discoverMovies(
 export async function getMovieById(tmdbId: string): Promise<TmdbMovie> {
   const data = await tmdbFetch<Record<string, unknown>>(buildMovieDetailUrl(tmdbId))
   return parseMovieResult(data)
+}
+
+export function buildWatchProvidersUrl(tmdbId: string): string {
+  return `${TMDB_BASE}/movie/${tmdbId}/watch/providers`
+}
+
+interface RawProvider {
+  provider_name?: string
+  logo_path?: string | null
+}
+
+// Pure parser for TMDB's /watch/providers response. Returns the subscription
+// (flatrate) providers for a region plus the single regional JustWatch link.
+export function parseWatchProviders(
+  raw: Record<string, unknown>,
+  region = 'US'
+): WatchProviders {
+  const results = (raw?.results ?? {}) as Record<string, unknown>
+  const regionData = results[region] as
+    | { flatrate?: RawProvider[]; link?: string }
+    | undefined
+
+  if (!regionData) return { providers: [], link: null }
+
+  const seen = new Set<string>()
+  const providers: WatchProvider[] = []
+  for (const p of regionData.flatrate ?? []) {
+    const name = p.provider_name?.trim()
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    providers.push({
+      name,
+      logoUrl: p.logo_path ? `${TMDB_LOGO_BASE}${p.logo_path}` : '',
+    })
+  }
+
+  return { providers, link: regionData.link ?? null }
+}
+
+export async function getWatchProviders(
+  tmdbId: string,
+  region = 'US'
+): Promise<WatchProviders> {
+  const data = await tmdbFetch<Record<string, unknown>>(buildWatchProvidersUrl(tmdbId))
+  return parseWatchProviders(data, region)
 }

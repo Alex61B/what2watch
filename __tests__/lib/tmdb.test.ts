@@ -1,4 +1,4 @@
-import { buildDiscoverUrl, parseMovieResult, STREAMING_SERVICES } from '@/lib/tmdb'
+import { buildDiscoverUrl, parseMovieResult, parseWatchProviders, STREAMING_SERVICES } from '@/lib/tmdb'
 
 describe('STREAMING_SERVICES', () => {
   it('contains exactly 6 services each with id, name, and tmdbId', () => {
@@ -84,5 +84,57 @@ describe('parseMovieResult', () => {
   it('returns null runtime when runtime is missing', () => {
     const { runtime: _, ...noRuntime } = raw
     expect(parseMovieResult(noRuntime).runtime).toBeNull()
+  })
+})
+
+describe('parseWatchProviders', () => {
+  const raw = {
+    results: {
+      US: {
+        link: 'https://www.themoviedb.org/movie/1/watch?locale=US',
+        flatrate: [
+          { provider_name: 'Netflix', logo_path: '/netflix.jpg' },
+          { provider_name: 'Hulu', logo_path: '/hulu.jpg' },
+          { provider_name: 'Netflix', logo_path: '/netflix.jpg' }, // duplicate
+        ],
+      },
+      GB: { link: 'https://example.com/gb', flatrate: [{ provider_name: 'Now', logo_path: '/now.jpg' }] },
+    },
+  }
+
+  it('maps US flatrate providers with full logo URLs', () => {
+    const { providers } = parseWatchProviders(raw, 'US')
+    expect(providers).toEqual([
+      { name: 'Netflix', logoUrl: 'https://image.tmdb.org/t/p/w92/netflix.jpg' },
+      { name: 'Hulu', logoUrl: 'https://image.tmdb.org/t/p/w92/hulu.jpg' },
+    ])
+  })
+
+  it('dedupes providers by name', () => {
+    const { providers } = parseWatchProviders(raw, 'US')
+    expect(providers.filter(p => p.name === 'Netflix')).toHaveLength(1)
+  })
+
+  it('returns the regional JustWatch link', () => {
+    expect(parseWatchProviders(raw, 'US').link).toBe(
+      'https://www.themoviedb.org/movie/1/watch?locale=US'
+    )
+  })
+
+  it('defaults to US region', () => {
+    expect(parseWatchProviders(raw).providers.map(p => p.name)).toEqual(['Netflix', 'Hulu'])
+  })
+
+  it('returns empty providers and null link when the region is missing', () => {
+    expect(parseWatchProviders(raw, 'FR')).toEqual({ providers: [], link: null })
+  })
+
+  it('handles a region with no flatrate tier', () => {
+    const noFlatrate = { results: { US: { link: 'https://example.com' } } }
+    expect(parseWatchProviders(noFlatrate, 'US')).toEqual({ providers: [], link: 'https://example.com' })
+  })
+
+  it('handles a missing results object', () => {
+    expect(parseWatchProviders({}, 'US')).toEqual({ providers: [], link: null })
   })
 })
