@@ -5,6 +5,11 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import MatchCelebration from "@/components/MatchCelebration";
 
+interface WatchProvider {
+  name: string;
+  logoUrl: string;
+}
+
 interface MatchedMovie {
   title: string;
   posterUrl: string;
@@ -13,6 +18,7 @@ interface MatchedMovie {
   overview: string;
   watchUrl?: string;
   streamingService?: string;
+  watchProviders?: { providers: WatchProvider[]; link: string | null };
 }
 
 interface PollResponse {

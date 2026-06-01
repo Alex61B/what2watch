@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getSessionToken, clearSessionCookie } from '@/lib/session'
-import { getMovieById } from '@/lib/tmdb'
+import { getMovieById, getWatchProviders } from '@/lib/tmdb'
 
 export async function GET(
   request: Request,
@@ -96,7 +96,17 @@ export async function GET(
         const queueEntry = await prisma.roomQueue.findUnique({
           where: { roomId_tmdbMovieId: { roomId: room.id, tmdbMovieId: room.matchedMovieId } },
         })
-        matchedMovie = { ...movie, watchUrl: queueEntry?.watchUrl, streamingService: queueEntry?.streamingService }
+        let watchProviders = { providers: [], link: null } as Awaited<ReturnType<typeof getWatchProviders>>
+        try {
+          watchProviders = await getWatchProviders(room.matchedMovieId)
+        } catch (provErr) {
+          console.warn('[poll] watch providers fetch failed (non-fatal)', {
+            roomId: room.id,
+            matchedMovieId: room.matchedMovieId,
+            message: provErr instanceof Error ? provErr.message : String(provErr),
+          })
+        }
+        matchedMovie = { ...movie, watchUrl: queueEntry?.watchUrl, streamingService: queueEntry?.streamingService, watchProviders }
       } catch (err) {
         console.error('[poll] matched movie tmdb fetch failed', {
           roomId: room.id,
