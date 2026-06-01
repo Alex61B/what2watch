@@ -73,7 +73,7 @@ export async function GET(
       console.log('[poll] 304', { roomId: room.id, queueVersion: room.queueVersion, memberId: member.id })
       return new NextResponse(null, {
         status: 304,
-        headers: { ETag: `"${room.queueVersion}"` },
+        headers: { ETag: `"${room.queueVersion}"`, 'Cache-Control': 'no-store' },
       })
     }
 
@@ -205,7 +205,7 @@ export async function GET(
         isHost: member.isHost,
       },
       {
-        headers: { ETag: `"${room.queueVersion}"` },
+        headers: { ETag: `"${room.queueVersion}"`, 'Cache-Control': 'no-store' },
       }
     )
   } catch (err) {

@@ -83,7 +83,7 @@ export default function VotePage() {
       if (lastVersionRef.current !== null) {
         headers["If-None-Match"] = `"${lastVersionRef.current}"`;
       }
-      const res = await fetch(`/api/rooms/${code}/poll`, { headers });
+      const res = await fetch(`/api/rooms/${code}/poll`, { headers, cache: "no-store" });
       if (res.status === 304) return;
       if (!res.ok) {
         console.warn("[client vote poll] non-ok", { code, status: res.status });

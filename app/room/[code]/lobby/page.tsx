@@ -85,7 +85,7 @@ export default function LobbyPage() {
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/rooms/${code}/poll`);
+        const res = await fetch(`/api/rooms/${code}/poll`, { cache: "no-store" });
         // TEMP DEBUG: a swallowed non-2xx here is why the 2nd user can be stuck.
         if (!res.ok) {
           console.warn("[client lobby poll] non-ok", { code, status: res.status });
