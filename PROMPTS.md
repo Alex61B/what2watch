@@ -2,6 +2,36 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-10 — Collapse list filters behind a "Filters" toggle
+
+**Prompt (summary):** Keep the search box always visible, but put the filter options (sort / min
+rating / year) behind a "Filters" toggle that expands on click.
+
+**Approach:** Added a `filtersOpen` state to `MovieListClient`. The search box + a "Filters" button now
+share one row; the Sort/Year/Min-rating controls render only when expanded (`aria-expanded` +
+`aria-controls`, ▾/▴ caret). A small accent dot on the button signals when a filter is applied while
+collapsed (`sort !== 'added' || minRating > 0 || decade !== 'all'`). Filtering logic unchanged.
+
+**Verification:** `scripts/verify.sh` green first pass — typecheck + lint + 189 Jest tests (new
+"controls behind a Filters toggle" case; the rating/year cases now open the panel first).
+
+## 2026-06-10 — Search + filters for Watch List / Seen Before
+
+**Prompt (summary):** Add a search box and filters to the watch list and seen-before pages. (User
+picked the filter set: search + sort + minimum rating + release-year.)
+
+**Approach:** Both pages render the shared `MovieListClient`, so all work landed there. Search/sort/
+filter run client-side over the already-loaded list (small personal lists; no API/schema change).
+Added a title search box (live filter + clear button), a sort dropdown (Recently added / Highest
+rated / Newest / A–Z), a minimum-rating slider, and a release-year decade dropdown (decades derived
+from the list). A distinct "No movies match your filters." state shows when the controls exclude
+everything (vs. the raw-empty "Nothing here yet."). Note: `MovieCache` only stores title/year/rating,
+so genre/runtime/streaming-service filters weren't possible without a migration (out of scope).
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 188 Jest tests (added search-narrows,
+rating-filter, decade-filter, and no-match cases; one remediation loop to widen a test helper's param
+type).
+
 ## 2026-06-10 — Cycle 2: per-member decks ("nope" only affects you) + card fits one screen
 
 **Prompt (summary):** A "nope" shouldn't yank the rest of the room to the next movie — just remove it
