@@ -2,6 +2,23 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-10 — Route tests for start + queue (GET) handlers
+
+**Prompt (summary):** Add unit tests for the requeue route + the seen-it/skip-reruns vote flow, and
+for functionality not yet tested. The requeue/watched/votes suites had already landed (entry below)
+via a parallel session, so this cycle covered the two highest-value still-untested handlers (the
+parallel session's research listed `start` and `queue` (GET) as out of scope).
+
+**Approach:** Two additive `@jest-environment node` suites — `__tests__/api/start.test.ts` (12 tests)
+and `__tests__/api/queue-route.test.ts` (9) — using the established mocked-`@/lib/prisma` + cookie-jar
+pattern; `discoverMovies`/`auth`/`getMovieById` mocked. start: host/state/member-count/service guards,
+422 no-movies, the shared-queue + per-member-queue build, and the non-fatal save-prefs hook. queue
+(GET): guards, voted/rejected/watched exclusion incl. the `watchedFilter` OR-clause for a linked
+user, the three null short-circuits (no eligible card / missing room-queue row / TMDB failure), the
+heartbeat, and the hydrated card + remaining count. No production changes.
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 170 Jest tests pass (28 suites; 21 new).
+
 ## 2026-06-10 — Route-handler tests for requeue / watched / votes (rec #4)
 
 **Prompt (summary):** Go ahead with recommendation #4 — unit tests for the requeue / watched / votes
