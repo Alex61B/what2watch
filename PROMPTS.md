@@ -2,6 +2,23 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-10 — Event tracking pipeline (Phase 1: core)
+
+**Prompt (summary):** Implement Phase 1 of the approved event-tracking spec/plan
+(`docs/superpowers/{specs,plans}/2026-06-10-event-tracking-pipeline*`): a first-party `Event`
+table, an unauthenticated `POST /api/events` ingest, a client `track()`/`flush()` over
+`sendBeacon`, and `<AnalyticsTracker/>` (session_start + strict-mode-safe page_view). Approved
+amendments: `pikflix_` storage prefix, `clientTs`→`props._clientTs`, test-only rate-limit reset.
+
+**Approach:** Shared allowlist (`lib/analytics-events.ts`) imported by client + ingest. Pure,
+clock-injected rate limiter (`lib/rate-limit.ts`) with a `__resetRateLimit` test hook. Ingest is
+best-effort (drops bad input → 204; 429 only on rate limit; never 500s). `Event` model added to
+`schema.prisma` (no relations) and the Prisma client regenerated via `prisma generate` so it
+typechecks — the **DB migration is deferred to a gated step** (user approval required).
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 200 Jest tests (31 suites; +11:
+7 ingest, 4 rate-limit). DB migration NOT yet run.
+
 ## 2026-06-10 — Seed script for test profiles + sample data
 
 **Prompt (summary):** Create login-able profiles + sample data so multi-user flows (starting a room
