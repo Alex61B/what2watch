@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { generateSessionToken, setSessionCookie, sessionCookieName } from '@/lib/session'
+import { generateSessionToken, setSessionCookie } from '@/lib/session'
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr]
@@ -30,49 +30,53 @@ export async function POST(
   }
 
   const sessionToken = generateSessionToken()
-  // Joining mid-session (VOTING) requires host approval; lobby joins are auto-approved.
-  const approved = room.status !== 'VOTING'
-  const member = await prisma.member.create({
-    data: {
-      roomId: room.id,
-      displayName: displayName.trim(),
-      sessionToken,
-      isHost: false,
-      approved,
-    },
-  })
 
-  // If voting has already started, create a per-member queue for this late joiner
-  if (room.status === 'VOTING') {
-    const roomMovieIds = await prisma.roomQueue.findMany({
-      where: { roomId: room.id },
-      select: { tmdbMovieId: true },
-      orderBy: { position: 'asc' },
-    }).then(rows => rows.map(r => r.tmdbMovieId))
+  // Create the member and (for a mid-session join) its per-member queue atomically,
+  // both derived from a single room-status read taken inside the transaction. This
+  // guarantees a late joiner is never left approved-but-queueless, and keeps the
+  // approval decision consistent with the queue build if `start` lands concurrently.
+  const member = await prisma.$transaction(async (tx) => {
+    const current = await tx.room.findUnique({
+      where: { id: room.id },
+      select: { status: true },
+    })
+    const status = current?.status ?? room.status
+    // Joining mid-session (VOTING) requires host approval; lobby joins auto-approve.
+    const approved = status !== 'VOTING'
 
-    if (roomMovieIds.length > 0) {
-      const shuffledForMember = shuffle([...roomMovieIds])
-      await prisma.memberQueue.createMany({
-        data: shuffledForMember.map((tmdbMovieId, position) => ({
-          memberId: member.id,
-          tmdbMovieId,
-          position,
-        })),
-        skipDuplicates: true,
-      })
+    const created = await tx.member.create({
+      data: {
+        roomId: room.id,
+        displayName: displayName.trim(),
+        sessionToken,
+        isHost: false,
+        approved,
+      },
+    })
+
+    if (status === 'VOTING') {
+      const roomMovieIds = await tx.roomQueue
+        .findMany({
+          where: { roomId: room.id },
+          select: { tmdbMovieId: true },
+          orderBy: { position: 'asc' },
+        })
+        .then((rows) => rows.map((r) => r.tmdbMovieId))
+
+      if (roomMovieIds.length > 0) {
+        const shuffledForMember = shuffle([...roomMovieIds])
+        await tx.memberQueue.createMany({
+          data: shuffledForMember.map((tmdbMovieId, position) => ({
+            memberId: created.id,
+            tmdbMovieId,
+            position,
+          })),
+          skipDuplicates: true,
+        })
+      }
     }
-  }
 
-  const memberCount = await prisma.member.count({ where: { roomId: room.id, leftAt: null } })
-  console.log('[join] member created', {
-    roomCode: code,
-    foundRoomId: room.id,
-    roomStatus: room.status,
-    memberId: member.id,
-    memberRoomId: member.roomId,
-    memberCount,
-    cookie: sessionCookieName(code),
-    tokenPrefix: sessionToken.slice(0, 8),
+    return created
   })
 
   const response = NextResponse.json({ memberId: member.id })

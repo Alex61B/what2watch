@@ -26,11 +26,11 @@ const rooms = [
 let members: MemberRow[] = []
 let seq = 0
 
-jest.mock('@/lib/prisma', () => ({
-  prisma: {
+jest.mock('@/lib/prisma', () => {
+  const prisma: Record<string, unknown> = {
     room: {
-      findUnique: jest.fn(async ({ where }: { where: { code: string } }) =>
-        rooms.find(r => r.code === where.code) ?? null),
+      findUnique: jest.fn(async ({ where }: { where: { code?: string; id?: string } }) =>
+        rooms.find(r => (where.code ? r.code === where.code : r.id === where.id)) ?? null),
     },
     member: {
       create: jest.fn(async ({ data }: { data: { roomId: string; displayName: string; sessionToken: string; isHost: boolean } }) => {
@@ -73,8 +73,10 @@ jest.mock('@/lib/prisma', () => ({
       findUnique: jest.fn(async () => null),
     },
     memberQueue: { createMany: jest.fn(async () => ({ count: 0 })) },
-  },
-}))
+  }
+  prisma.$transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn(prisma)
+  return { prisma }
+})
 
 jest.mock('@/lib/tmdb', () => ({ getMovieById: jest.fn(async () => ({})) }))
 
