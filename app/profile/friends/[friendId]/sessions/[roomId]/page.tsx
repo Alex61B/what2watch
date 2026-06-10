@@ -11,7 +11,7 @@ export default async function SharedSessionPage({
   await requireUserId()
   const { friendId, roomId } = await params
   return (
-    <main className="min-h-screen bg-gray-950 text-white px-4 py-12">
+    <main className="min-h-screen bg-canvas text-ink px-4 py-12">
       <div className="w-full max-w-2xl mx-auto space-y-6">
         <ProfileHeader title="Shared Yes" backHref={`/profile/friends/${friendId}`} backLabel="← Friend" />
         <SharedSessionClient friendId={friendId} roomId={roomId} />

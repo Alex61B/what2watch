@@ -69,19 +69,19 @@ function SignInForm() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center bg-gray-950 text-white px-4 py-12">
+    <main className="min-h-screen flex flex-col items-center justify-center bg-canvas text-ink px-4 py-12">
       <div className="w-full max-w-md space-y-8">
         {/* Header */}
         <div className="text-center space-y-2">
           <h1 className="text-3xl font-bold tracking-tight">Sign in</h1>
-          <p className="text-gray-400">Welcome back to What2Watch</p>
+          <p className="text-muted">Welcome back to What2Watch</p>
         </div>
 
         {/* Form card */}
-        <section className="bg-gray-900 rounded-2xl p-6 space-y-4">
+        <section className="bg-surface rounded-2xl p-6 space-y-4">
           <form onSubmit={handleCredentialsSignIn} className="space-y-3">
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-1">
+              <label htmlFor="email" className="block text-sm font-medium text-ink mb-1">
                 Email
               </label>
               <input
@@ -93,12 +93,12 @@ function SignInForm() {
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={loading}
                 required
-                className="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                className="w-full rounded-lg bg-surface-soft border border-line px-4 py-2.5 text-ink placeholder-faint focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
               />
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-1">
+              <label htmlFor="password" className="block text-sm font-medium text-ink mb-1">
                 Password
               </label>
               <input
@@ -110,7 +110,7 @@ function SignInForm() {
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={loading}
                 required
-                className="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                className="w-full rounded-lg bg-surface-soft border border-line px-4 py-2.5 text-ink placeholder-faint focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
               />
             </div>
 
@@ -119,22 +119,22 @@ function SignInForm() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3.5 font-semibold transition-colors"
+              className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3.5 font-semibold transition-colors text-white"
             >
               {loading ? 'Signing in...' : 'Sign in'}
             </button>
           </form>
 
           <div className="flex items-center gap-4">
-            <div className="flex-1 h-px bg-gray-800" />
-            <span className="text-gray-600 text-sm">or</span>
-            <div className="flex-1 h-px bg-gray-800" />
+            <div className="flex-1 h-px bg-surface-soft" />
+            <span className="text-muted text-sm">or</span>
+            <div className="flex-1 h-px bg-surface-soft" />
           </div>
 
           <button
             onClick={handleGoogleSignIn}
             disabled={googleLoading}
-            className="w-full rounded-xl border border-gray-700 bg-transparent hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 font-medium text-white transition-colors flex items-center justify-center gap-3"
+            className="w-full rounded-xl border border-line bg-transparent hover:bg-surface-soft disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 font-medium text-ink transition-colors flex items-center justify-center gap-3"
           >
             <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
               <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
@@ -147,7 +147,7 @@ function SignInForm() {
         </section>
 
         {/* Footer links */}
-        <div className="text-center space-y-2 text-sm text-gray-400">
+        <div className="text-center space-y-2 text-sm text-muted">
           <p>
             Don&apos;t have an account?{' '}
             <Link href="/auth/signup" className="text-indigo-400 hover:text-indigo-300">
@@ -155,7 +155,7 @@ function SignInForm() {
             </Link>
           </p>
           <p>
-            <Link href="/" className="text-gray-500 hover:text-gray-300 transition-colors">
+            <Link href="/" className="text-faint hover:text-ink transition-colors">
               Continue as guest
             </Link>
           </p>

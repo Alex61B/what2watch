@@ -2,7 +2,45 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Dual-handle range slider: block track events, allow only thumb events */
+/* ───────────────────────────────────────────────────────────────────────────
+   Theme tokens. :root = light (the DEFAULT, editorial PikFlix look from the
+   reference mockups). .dark = the app's original dark palette, kept as an
+   alternate that rides along on the same tokens. Tailwind maps these to the
+   `canvas / surface / surface-soft / line / ink / muted / faint / accent`
+   utilities (see tailwind.config.ts). The toggle adds/removes `.dark` on <html>.
+   ─────────────────────────────────────────────────────────────────────────── */
+:root {
+  --canvas: #f4f3ee;       /* off-white page background                          */
+  --surface: #ffffff;      /* cards, inputs                                      */
+  --surface-soft: #edebe3; /* inactive chips, slider track, hover, fills         */
+  --line: #d8d5cc;         /* hairline borders                                   */
+  --ink: #16130f;          /* near-black text + crisp borders/buttons            */
+  --muted: #5c584f;        /* secondary text                                     */
+  --faint: #8e897c;        /* tertiary text / placeholders                       */
+  --accent: #d0021b;       /* red accent                                         */
+  --accent-ink: #ffffff;   /* text on the red accent                             */
+  color-scheme: light;
+}
+.dark {
+  --canvas: #030712;       /* gray-950 */
+  --surface: #111827;      /* gray-900 */
+  --surface-soft: #1f2937; /* gray-800 */
+  --line: #374151;         /* gray-700 */
+  --ink: #ffffff;
+  --muted: #9ca3af;        /* gray-400 */
+  --faint: #6b7280;        /* gray-500 */
+  --accent: #ef4444;       /* red-500 — brighter for dark contrast */
+  --accent-ink: #ffffff;
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--canvas);
+  color: var(--ink);
+}
+
+/* Dual-handle range slider: block track events, allow only thumb events.
+   Thumb uses the red accent to match the editorial mockups. */
 .dual-thumb {
   pointer-events: none;
   -webkit-appearance: none;
@@ -18,8 +56,8 @@
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(208, 2, 27, 0.18);
 }
 .dual-thumb::-moz-range-thumb {
   pointer-events: all;
@@ -27,7 +65,7 @@
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #6366f1;
+  background: var(--accent);
   border: none;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+  box-shadow: 0 0 0 3px rgba(208, 2, 27, 0.18);
 }

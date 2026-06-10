@@ -45,6 +45,5 @@ export async function POST(
     await prisma.member.update({ where: { id: target.id }, data: { leftAt: new Date() } })
   }
 
-  console.log('[approvals]', { roomCode: code, hostId: host.id, memberId, action })
   return NextResponse.json({ ok: true })
 }

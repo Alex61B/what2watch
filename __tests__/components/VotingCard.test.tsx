@@ -4,7 +4,7 @@ import VotingCard from '@/components/VotingCard'
 
 jest.mock('next/image', () => ({
   __esModule: true,
-  default: (props: ImgHTMLAttributes<HTMLImageElement>) => <img {...props} />,
+  default: ({ fill, priority, ...props }: ImgHTMLAttributes<HTMLImageElement> & { fill?: boolean; priority?: boolean }) => <img {...props} />,
 }))
 
 const baseMovie = {
@@ -30,17 +30,17 @@ describe('VotingCard', () => {
     expect(screen.getByText(/7\.9/)).toBeInTheDocument()
   })
 
-  it('YES button calls onVote(true)', () => {
+  it('PIK IT button calls onVote(true)', () => {
     const onVote = jest.fn()
     render(<VotingCard movie={baseMovie} onVote={onVote} />)
-    fireEvent.click(screen.getByRole('button', { name: /yes/i }))
+    fireEvent.click(screen.getByRole('button', { name: /pik it/i }))
     expect(onVote).toHaveBeenCalledWith(true)
   })
 
-  it('NO button calls onVote(false)', () => {
+  it('NOPE button calls onVote(false)', () => {
     const onVote = jest.fn()
     render(<VotingCard movie={baseMovie} onVote={onVote} />)
-    fireEvent.click(screen.getByRole('button', { name: /no/i }))
+    fireEvent.click(screen.getByRole('button', { name: /nope/i }))
     expect(onVote).toHaveBeenCalledWith(false)
   })
 
@@ -49,7 +49,7 @@ describe('VotingCard', () => {
     expect(screen.getByText(/118 min/)).toBeInTheDocument()
   })
 
-  it('does not render runtime text when runtime is null', () => {
+  it('does not render runtime separator when runtime is null', () => {
     render(<VotingCard movie={{ ...baseMovie, runtime: null }} onVote={jest.fn()} />)
     expect(screen.queryByText(/min/)).toBeNull()
     expect(screen.queryByText(/·/)).toBeNull()
@@ -57,24 +57,31 @@ describe('VotingCard', () => {
 
   it('renders fallback when posterUrl is empty string', () => {
     render(<VotingCard movie={{ ...baseMovie, posterUrl: '' }} onVote={jest.fn()} />)
-    expect(screen.getByText('No Image')).toBeInTheDocument()
+    expect(screen.getByText(/no image/i)).toBeInTheDocument()
   })
 
-  it('renders LIKE and NOPE swipe stamps', () => {
+  it('renders PIK and NOPE swipe stamps', () => {
     render(<VotingCard movie={baseMovie} onVote={jest.fn()} />)
-    expect(screen.getByText(/^like$/i)).toBeInTheDocument()
+    expect(screen.getByText(/^pik$/i)).toBeInTheDocument()
     expect(screen.getByText(/^nope$/i)).toBeInTheDocument()
   })
 
-  it('disables both buttons when disabled prop is true', () => {
+  it('shows the seen-it toggle and fires onToggleSeen', () => {
+    const onToggleSeen = jest.fn()
+    render(<VotingCard movie={baseMovie} onVote={jest.fn()} onToggleSeen={onToggleSeen} />)
+    fireEvent.click(screen.getByRole('button', { name: /seen it/i }))
+    expect(onToggleSeen).toHaveBeenCalled()
+  })
+
+  it('disables both vote buttons when disabled prop is true', () => {
     const onVote = jest.fn()
     render(<VotingCard movie={baseMovie} onVote={onVote} disabled />)
-    const yesBtn = screen.getByRole('button', { name: /yes/i })
-    const noBtn = screen.getByRole('button', { name: /no/i })
-    expect(yesBtn).toBeDisabled()
-    expect(noBtn).toBeDisabled()
-    fireEvent.click(yesBtn)
-    fireEvent.click(noBtn)
+    const pikBtn = screen.getByRole('button', { name: /pik it/i })
+    const nopeBtn = screen.getByRole('button', { name: /nope/i })
+    expect(pikBtn).toBeDisabled()
+    expect(nopeBtn).toBeDisabled()
+    fireEvent.click(pikBtn)
+    fireEvent.click(nopeBtn)
     expect(onVote).not.toHaveBeenCalled()
   })
 })

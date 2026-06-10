@@ -72,21 +72,21 @@ export default function FriendsClient() {
             value={query}
             onChange={e => setQuery(e.target.value)}
             placeholder="Search by name or email"
-            className="flex-1 rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="flex-1 rounded-lg bg-surface-soft border border-line px-4 py-2.5 text-ink focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
-          <button type="submit" className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-2.5 font-semibold">Search</button>
+          <button type="submit" className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-2.5 font-semibold text-white">Search</button>
         </form>
         {results.map(u => {
           const already = friendIds.has(u.id)
           const pending = outgoingIds.has(u.id)
           return (
-            <div key={u.id} className="flex items-center justify-between bg-gray-900 rounded-lg px-4 py-3">
-              <span className="text-sm">{u.displayName} <span className="text-gray-500">{u.email}</span></span>
+            <div key={u.id} className="flex items-center justify-between bg-surface rounded-lg px-4 py-3">
+              <span className="text-sm">{u.displayName} <span className="text-faint">{u.email}</span></span>
               <button
                 type="button"
                 disabled={already || pending}
                 onClick={() => sendRequest(u.id)}
-                className="rounded-lg border border-gray-700 hover:bg-gray-800 disabled:opacity-40 px-3 py-1.5 text-xs"
+                className="rounded-lg border border-line hover:bg-surface-soft disabled:opacity-40 px-3 py-1.5 text-xs"
               >
                 {already ? 'Friends' : pending ? 'Requested' : 'Add friend'}
               </button>
@@ -100,11 +100,11 @@ export default function FriendsClient() {
         <section className="space-y-3">
           <h2 className="text-lg font-semibold">Friend requests</h2>
           {incoming.map(item => (
-            <div key={item.requestId} className="flex items-center justify-between bg-gray-900 rounded-lg px-4 py-3">
+            <div key={item.requestId} className="flex items-center justify-between bg-surface rounded-lg px-4 py-3">
               <span className="text-sm">{item.user.displayName}</span>
               <div className="flex gap-2">
-                <button type="button" onClick={() => respond(item.requestId, 'accept')} className="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-xs">Accept</button>
-                <button type="button" onClick={() => respond(item.requestId, 'decline')} className="rounded-lg border border-gray-700 hover:bg-gray-800 px-3 py-1.5 text-xs">Decline</button>
+                <button type="button" onClick={() => respond(item.requestId, 'accept')} className="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-xs text-white">Accept</button>
+                <button type="button" onClick={() => respond(item.requestId, 'decline')} className="rounded-lg border border-line hover:bg-surface-soft px-3 py-1.5 text-xs">Decline</button>
               </div>
             </div>
           ))}
@@ -116,7 +116,7 @@ export default function FriendsClient() {
         <section className="space-y-3">
           <h2 className="text-lg font-semibold">Pending (sent)</h2>
           {outgoing.map(item => (
-            <div key={item.requestId} className="bg-gray-900 rounded-lg px-4 py-3 text-sm text-gray-400">
+            <div key={item.requestId} className="bg-surface rounded-lg px-4 py-3 text-sm text-muted">
               {item.user.displayName} — awaiting response
             </div>
           ))}
@@ -127,10 +127,10 @@ export default function FriendsClient() {
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Friends</h2>
         {loaded && friends.length === 0 && (
-          <p className="text-gray-400 text-sm">No friends yet. Search above to send a request.</p>
+          <p className="text-muted text-sm">No friends yet. Search above to send a request.</p>
         )}
         {friends.map(f => (
-          <Link key={f.id} href={`/profile/friends/${f.id}`} className="block bg-gray-900 hover:bg-gray-800 rounded-lg px-4 py-3 transition-colors">
+          <Link key={f.id} href={`/profile/friends/${f.id}`} className="block bg-surface hover:bg-surface-soft rounded-lg px-4 py-3 transition-colors">
             {f.displayName}
           </Link>
         ))}

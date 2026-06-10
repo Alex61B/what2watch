@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import MatchCelebration from "@/components/MatchCelebration";
+import MatchResult from "@/components/MatchResult";
 
 interface WatchProvider {
   name: string;
@@ -16,75 +17,84 @@ interface MatchedMovie {
   year: number;
   rating: number;
   overview: string;
+  runtime?: number | null;
+  genreIds?: number[];
   watchUrl?: string;
   streamingService?: string;
   watchProviders?: { providers: WatchProvider[]; link: string | null };
 }
 
+interface Member {
+  id: string;
+  displayName: string;
+  isHost?: boolean;
+}
+
 interface PollResponse {
   status: string;
-  name: string | null;
-  memberCount: number;
+  members?: Member[];
   matchedMovie: MatchedMovie | null;
 }
+
+// How long the "It's a match." interstitial holds before the result reveals.
+const INTERSTITIAL_MS = 1800;
+
+type Phase = "loading" | "intro" | "result";
 
 export default function MatchPage() {
   const params = useParams();
   const code = params.code as string;
 
-  const [matchedMovie, setMatchedMovie] = useState<MatchedMovie | null | undefined>(undefined);
-  const [roomName, setRoomName] = useState<string | null>(null);
+  const [phase, setPhase] = useState<Phase>("loading");
+  const [movie, setMovie] = useState<MatchedMovie | null>(null);
+  const [members, setMembers] = useState<Member[]>([]);
 
   useEffect(() => {
-    async function fetchMatch() {
+    async function load() {
       try {
-        const res = await fetch(`/api/rooms/${code}/poll`);
-        if (!res.ok) {
-          setMatchedMovie(null);
-          return;
+        const res = await fetch(`/api/rooms/${code}/poll`, { cache: "no-store" });
+        if (res.ok) {
+          const data: PollResponse = await res.json();
+          setMovie(data.matchedMovie ?? null);
+          setMembers(data.members ?? []);
         }
-        const data: PollResponse = await res.json();
-        setMatchedMovie(data.matchedMovie ?? null);
-        setRoomName(data.name ?? null);
       } catch {
-        setMatchedMovie(null);
+        // fall through — we still show the interstitial then a fallback
+      } finally {
+        setPhase("intro");
       }
     }
-    fetchMatch();
+    load();
   }, [code]);
 
-  if (matchedMovie === undefined) {
-    return (
-      <main className="min-h-screen flex items-center justify-center bg-gray-950 text-white px-4">
-        <p className="text-gray-400">Loading your match…</p>
-      </main>
-    );
+  // Hold on the interstitial, then reveal the result.
+  useEffect(() => {
+    if (phase !== "intro") return;
+    const id = setTimeout(() => setPhase("result"), INTERSTITIAL_MS);
+    return () => clearTimeout(id);
+  }, [phase]);
+
+  if (phase !== "result") {
+    return <MatchCelebration />;
   }
 
-  return (
-    <main className="min-h-screen flex flex-col items-center justify-center bg-gray-950 text-white px-4 py-10">
-      <div className="w-full max-w-sm space-y-6">
-        {roomName && (
-          <p className="text-center text-sm text-gray-400">from {roomName}</p>
-        )}
-        {matchedMovie ? (
-          <MatchCelebration movie={matchedMovie} />
-        ) : (
-          <div className="rounded-2xl bg-white p-8 shadow-lg text-center text-gray-800">
-            <h1 className="text-3xl font-extrabold text-green-500 mb-3">It&apos;s a Match!</h1>
-            <p className="text-gray-600">You found a match! Check your streaming service.</p>
-          </div>
-        )}
+  if (movie) {
+    return <MatchResult code={code} movie={movie} members={members} />;
+  }
 
-        <div className="text-center">
-          <Link
-            href="/"
-            className="text-sm text-gray-400 hover:text-gray-200 transition-colors underline underline-offset-2"
-          >
-            Back to home
-          </Link>
-        </div>
-      </div>
+  // Fallback if the matched movie couldn't be loaded.
+  return (
+    <main className="flex min-h-screen flex-col items-center justify-center bg-canvas px-6 text-center text-ink">
+      <h1 className="font-serif text-4xl font-bold">
+        Tonight&apos;s <span className="italic text-accent">pick.</span>
+      </h1>
+      <p className="mt-3 text-muted">You found a match! Check your streaming service.</p>
+      <Link
+        href="/"
+        className="mt-6 text-[11px] font-semibold uppercase tracking-[0.18em] text-ink underline-offset-4 hover:underline"
+      >
+        ↻ Pik again
+      </Link>
     </main>
   );
 }

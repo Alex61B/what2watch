@@ -18,19 +18,39 @@ interface VotingCardProps {
   movie: Movie
   onVote: (vote: boolean) => void
   disabled?: boolean
+  /** Whether this card is marked "seen" (controlled by the parent). */
+  seen?: boolean
+  onToggleSeen?: () => void
+  /** Room's "Skip the Reruns" setting — changes what marking seen does. */
+  skipReruns?: boolean
 }
 
 // Past this horizontal drag distance (px), releasing commits the vote.
 const SWIPE_THRESHOLD = 100
 
-export default function VotingCard({ movie, onVote, disabled = false }: VotingCardProps) {
+function Stars({ rating }: { rating: number }) {
+  const filled = Math.max(0, Math.min(5, Math.round(rating / 2)))
+  return (
+    <span className="text-accent">
+      {'★'.repeat(filled)}
+      <span className="text-line">{'★'.repeat(5 - filled)}</span>
+    </span>
+  )
+}
+
+export default function VotingCard({
+  movie,
+  onVote,
+  disabled = false,
+  seen = false,
+  onToggleSeen,
+  skipReruns = false,
+}: VotingCardProps) {
   const startXRef = useRef<number | null>(null)
   const [dragX, setDragX] = useState(0)
   const [dragging, setDragging] = useState(false)
   const [exitDir, setExitDir] = useState<'left' | 'right' | null>(null)
 
-  // Commit a vote: fly the card off in the matching direction and notify the
-  // parent synchronously (buttons and threshold-swipes share this path).
   function commit(vote: boolean) {
     if (disabled || exitDir) return
     setExitDir(vote ? 'right' : 'left')
@@ -58,7 +78,7 @@ export default function VotingCard({ movie, onVote, disabled = false }: VotingCa
     if (Math.abs(delta) > SWIPE_THRESHOLD) {
       commit(delta > 0)
     } else {
-      setDragX(0) // springs back via the transition below
+      setDragX(0)
     }
   }
 
@@ -67,90 +87,122 @@ export default function VotingCard({ movie, onVote, disabled = false }: VotingCa
 
   const transform = exitDir
     ? exitDir === 'right'
-      ? 'translateX(120%) rotate(12deg)'
-      : 'translateX(-120%) rotate(-12deg)'
-    : `translateX(${dragX}px) rotate(${dragX * 0.05}deg)`
+      ? 'translateX(120%) rotate(8deg)'
+      : 'translateX(-120%) rotate(-8deg)'
+    : `translateX(${dragX}px) rotate(${dragX * 0.04}deg)`
 
   return (
-    <div
-      className="relative flex flex-col overflow-hidden rounded-2xl bg-white shadow-lg select-none"
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
-      style={{
-        transform,
-        opacity: exitDir ? 0 : 1,
-        touchAction: 'pan-y',
-        transition: dragging ? 'none' : 'transform 0.3s ease, opacity 0.3s ease',
-        cursor: disabled ? 'default' : 'grab',
-      }}
-    >
-      {/* Poster */}
-      <div className="relative h-72 w-full bg-gray-200">
-        {movie.posterUrl ? (
-          <Image
-            src={movie.posterUrl}
-            alt={`${movie.title} poster`}
-            fill
-            sizes="(max-width: 640px) 100vw, 400px"
-            className="object-cover"
-            draggable={false}
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center text-gray-400">
-            No Image
+    <div className="select-none">
+      <div
+        className="relative flex flex-col overflow-hidden border border-ink bg-surface text-ink"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        style={{
+          transform,
+          opacity: exitDir ? 0 : 1,
+          touchAction: 'pan-y',
+          transition: dragging ? 'none' : 'transform 0.3s ease, opacity 0.3s ease',
+          cursor: disabled ? 'default' : 'grab',
+        }}
+      >
+        {/* Poster */}
+        <div className="relative aspect-[3/4] w-full bg-surface-soft">
+          {movie.posterUrl ? (
+            <Image
+              src={movie.posterUrl}
+              alt={`${movie.title} poster`}
+              fill
+              sizes="(max-width: 640px) 100vw, 400px"
+              className="object-cover"
+              draggable={false}
+              priority
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-muted">No image</div>
+          )}
+
+          {/* Drag stamps */}
+          <div
+            className="pointer-events-none absolute left-4 top-4 rotate-[-10deg] border-2 border-ink px-3 py-1 text-xl font-extrabold uppercase tracking-wider text-ink"
+            style={{ opacity: likeOpacity }}
+          >
+            Pik
           </div>
-        )}
+          <div
+            className="pointer-events-none absolute right-4 top-4 rotate-[10deg] border-2 border-accent px-3 py-1 text-xl font-extrabold uppercase tracking-wider text-accent"
+            style={{ opacity: nopeOpacity }}
+          >
+            Nope
+          </div>
 
-        {/* LIKE / NOPE drag stamps */}
-        <div
-          className="pointer-events-none absolute left-4 top-4 rotate-[-12deg] rounded-md border-4 border-green-500 px-3 py-1 text-2xl font-extrabold uppercase tracking-wider text-green-500"
-          style={{ opacity: likeOpacity }}
-        >
-          Like
-        </div>
-        <div
-          className="pointer-events-none absolute right-4 top-4 rotate-[12deg] rounded-md border-4 border-red-500 px-3 py-1 text-2xl font-extrabold uppercase tracking-wider text-red-500"
-          style={{ opacity: nopeOpacity }}
-        >
-          Nope
+          {/* Seen-it toggle */}
+          {onToggleSeen && (
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleSeen()
+              }}
+              aria-pressed={seen}
+              title={
+                skipReruns
+                  ? 'Everyone has seen it — remove from the night'
+                  : 'Mark that you have seen this'
+              }
+              className={`absolute bottom-3 right-3 inline-flex items-center gap-1.5 border px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] backdrop-blur-sm transition-colors ${
+                seen
+                  ? 'border-accent bg-accent text-accent-ink'
+                  : 'border-white/70 bg-black/40 text-white hover:bg-black/60'
+              }`}
+            >
+              {seen ? '✓ Seen' : '👁 Seen it?'}
+            </button>
+          )}
         </div>
 
-        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-4 pb-3 pt-8">
-          <h2 className="text-lg font-bold leading-tight text-white drop-shadow">
-            {movie.title}
-          </h2>
+        {/* Info */}
+        <div className="flex flex-col gap-2 p-5">
+          <h2 className="font-serif text-2xl font-bold leading-tight">{movie.title}</h2>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+            {movie.year}
+            {movie.runtime ? ` · ${movie.runtime} min` : ''}
+          </p>
+          <p className="text-sm">
+            <Stars rating={movie.rating} />
+            <span className="ml-2 font-semibold text-ink">{movie.rating}</span>
+            <span className="ml-1 text-faint">/10 IMDB</span>
+          </p>
+          <p className="mt-1 line-clamp-4 text-sm leading-relaxed text-muted">{movie.overview}</p>
         </div>
       </div>
 
-      {/* Info */}
-      <div className="flex flex-1 flex-col gap-2 p-4">
-        <div className="flex items-center gap-3 text-sm text-gray-500">
-          <span>{movie.year}{movie.runtime ? ` · ${movie.runtime} min` : ''}</span>
-          <span className="text-yellow-500">★ {movie.rating}</span>
-        </div>
-
-        <p className="line-clamp-3 text-sm text-gray-600">{movie.overview}</p>
+      {/* Swipe hints */}
+      <div className="mt-3 flex items-center justify-center gap-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-faint">
+        <span>‹ Swipe to pass</span>
+        <span className="text-line">|</span>
+        <span>Swipe to pik ›</span>
       </div>
 
       {/* Buttons */}
-      <div className="flex gap-3 p-4 pt-0">
+      <div className="mt-3 flex gap-3">
         <button
           type="button"
           onClick={() => commit(false)}
           disabled={disabled}
-          className="flex-1 rounded-xl bg-red-500 py-3 text-base font-semibold text-white transition-colors hover:bg-red-600 active:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="flex-1 rounded-none border border-accent bg-transparent py-3.5 text-sm font-semibold uppercase tracking-[0.12em] text-accent transition-colors hover:bg-accent hover:text-accent-ink disabled:cursor-not-allowed disabled:opacity-40"
         >
-          NO
+          ✕ Nope
         </button>
         <button
           type="button"
           onClick={() => commit(true)}
           disabled={disabled}
-          className="flex-1 rounded-xl bg-green-500 py-3 text-base font-semibold text-white transition-colors hover:bg-green-600 active:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="flex-1 rounded-none bg-ink py-3.5 text-sm font-semibold uppercase tracking-[0.12em] text-canvas transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          YES
+          ✓ Pik it
         </button>
       </div>
     </div>

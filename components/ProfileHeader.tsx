@@ -17,9 +17,10 @@ interface ProfileHeaderProps {
 export default function ProfileHeader({ title, backHref, backLabel }: ProfileHeaderProps) {
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      {/* pr-12 keeps the Home link clear of the fixed top-right theme toggle */}
+      <div className="flex items-center justify-between pr-12">
         {backHref ? (
-          <Link href={backHref} className="text-sm text-gray-400 hover:text-gray-200">
+          <Link href={backHref} className="text-sm text-muted hover:text-ink">
             {backLabel ?? '← Back'}
           </Link>
         ) : (
@@ -27,7 +28,7 @@ export default function ProfileHeader({ title, backHref, backLabel }: ProfileHea
         )}
         <Link
           href="/"
-          className="inline-flex items-center gap-1.5 rounded-lg bg-gray-800 hover:bg-gray-700 px-3 py-1.5 text-sm font-medium text-gray-200 transition-colors"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-surface-soft hover:bg-line px-3 py-1.5 text-sm font-medium text-ink transition-colors"
         >
           <span aria-hidden>🏠</span> Home
         </Link>

@@ -31,28 +31,28 @@ export default function FriendDetailClient({ friendId }: { friendId: string }) {
     window.location.href = '/profile/friends'
   }
 
-  if (forbidden) return <p className="text-gray-400">You are not friends with this user.</p>
-  if (!detail) return <p className="text-gray-400">Loading…</p>
+  if (forbidden) return <p className="text-muted">You are not friends with this user.</p>
+  if (!detail) return <p className="text-muted">Loading…</p>
 
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">{detail.friend.displayName}</h1>
-        <button type="button" onClick={unfriend} className="rounded-lg border border-gray-700 hover:bg-gray-800 px-3 py-1.5 text-xs text-gray-300">Unfriend</button>
+        <button type="button" onClick={unfriend} className="rounded-lg border border-line hover:bg-surface-soft px-3 py-1.5 text-xs text-ink">Unfriend</button>
       </div>
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Shared Watch List</h2>
         {detail.sharedWatchlist.length === 0 ? (
-          <p className="text-gray-400 text-sm">No movies you both want to watch yet.</p>
+          <p className="text-muted text-sm">No movies you both want to watch yet.</p>
         ) : (
           <ul className="grid grid-cols-2 sm:grid-cols-3 gap-4">
             {detail.sharedWatchlist.map(m => (
-              <li key={m.tmdbMovieId} className="bg-gray-900 rounded-xl overflow-hidden">
+              <li key={m.tmdbMovieId} className="bg-surface rounded-xl overflow-hidden">
                 {m.posterUrl
                   // eslint-disable-next-line @next/next/no-img-element
                   ? <img src={m.posterUrl} alt={m.title} className="w-full aspect-[2/3] object-cover" />
-                  : <div className="w-full aspect-[2/3] bg-gray-800" />}
+                  : <div className="w-full aspect-[2/3] bg-surface-soft" />}
                 <p className="p-3 text-sm">{m.title}</p>
               </li>
             ))}
@@ -63,16 +63,16 @@ export default function FriendDetailClient({ friendId }: { friendId: string }) {
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Previous Sessions Together</h2>
         {detail.sessions.length === 0 ? (
-          <p className="text-gray-400 text-sm">No shared sessions yet.</p>
+          <p className="text-muted text-sm">No shared sessions yet.</p>
         ) : (
           detail.sessions.map(s => (
             <Link
               key={s.roomId}
               href={`/profile/friends/${friendId}/sessions/${s.roomId}`}
-              className="block bg-gray-900 hover:bg-gray-800 rounded-lg px-4 py-3 transition-colors"
+              className="block bg-surface hover:bg-surface-soft rounded-lg px-4 py-3 transition-colors"
             >
               <span className="font-medium">{s.code}</span>
-              <span className="text-gray-500 text-sm"> — {s.sharedYesCount} shared yes</span>
+              <span className="text-faint text-sm"> — {s.sharedYesCount} shared yes</span>
             </Link>
           ))
         )}

@@ -46,7 +46,30 @@ export interface DiscoverFilters {
   maxRuntime?: number
   minRating?: number
   maxRating?: number
+  /** "How deep are we going?" dial (1–5); maps to a TMDB vote_count band. */
+  depth?: number
 }
+
+/**
+ * The depth dial mapped to review-count (`vote_count`) bands. Derived from the
+ * measured distribution of the streamable US catalog (see docs/research.md):
+ * equal-population fifths, so each level is a meaningful, well-populated
+ * popularity tier. Low depth = mainstream (heavily reviewed); high depth =
+ * obscure (lightly reviewed). Level 1 has no upper cap.
+ */
+export const DEPTH_BANDS: Record<number, { gte: number; lte?: number }> = {
+  1: { gte: 500 },            // Crowd-Pleaser
+  2: { gte: 150, lte: 499 },  // Easy Watch
+  3: { gte: 75, lte: 149 },   // The Sweet Spot (default)
+  4: { gte: 35, lte: 74 },    // Deep Cut
+  5: { gte: 15, lte: 34 },    // Certified Cinephile
+}
+
+/** Default vote_count floor when no depth is selected (the app's prior behaviour). */
+const DEFAULT_MIN_VOTES = 100
+
+/** Below this many banded results, back-fill without the band so no combo 422s. */
+const MIN_BACKFILL_RESULTS = 12
 
 export interface WatchProvider {
   name: string
@@ -70,11 +93,9 @@ async function tmdbFetch<T>(url: string): Promise<T> {
 
   const cached = cache.get(url)
   if (cached && cached.expiresAt > Date.now()) {
-    console.log('[tmdb] response', { url, status: 200, cacheHit: true })
     return cached.data as T
   }
 
-  console.log('[tmdb] request', { url, cacheHit: false })
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${key}` },
   })
@@ -83,10 +104,6 @@ async function tmdbFetch<T>(url: string): Promise<T> {
     throw new Error(`TMDB fetch failed: ${res.status}`)
   }
   const data = await res.json()
-  const resultCount = Array.isArray((data as { results?: unknown[] }).results)
-    ? (data as { results: unknown[] }).results.length
-    : undefined
-  console.log('[tmdb] response', { url, status: res.status, cacheHit: false, resultCount })
   cache.set(url, { data, expiresAt: Date.now() + 60 * 60 * 1000 })
   return data as T
 }
@@ -101,13 +118,18 @@ export function buildDiscoverUrl(serviceIds: ServiceId[], filters: DiscoverFilte
     with_watch_providers: providerIds,
     watch_region: 'US',
     sort_by: 'popularity.desc',
-    'vote_count.gte': '100',
   })
 
   if (filters.genres?.length) params.set('with_genres', filters.genres.join('|'))
   if (filters.maxRuntime) params.set('with_runtime.lte', String(filters.maxRuntime))
   if (filters.minRating) params.set('vote_average.gte', String(filters.minRating))
   if (filters.maxRating) params.set('vote_average.lte', String(filters.maxRating))
+
+  // The depth dial maps to a review-count (vote_count) band. With no depth set,
+  // fall back to the app's prior floor so existing behaviour is unchanged.
+  const band = filters.depth ? DEPTH_BANDS[filters.depth] : undefined
+  params.set('vote_count.gte', String(band?.gte ?? DEFAULT_MIN_VOTES))
+  if (band?.lte) params.set('vote_count.lte', String(band.lte))
 
   return `${TMDB_BASE}/discover/movie?${params}`
 }
@@ -129,10 +151,10 @@ export function parseMovieResult(raw: Record<string, unknown>): TmdbMovie {
   }
 }
 
-export async function discoverMovies(
+async function discoverPages(
   serviceIds: ServiceId[],
   filters: DiscoverFilters,
-  maxResults = 60
+  maxResults: number
 ): Promise<TmdbMovie[]> {
   const movies: TmdbMovie[] = []
   let page = 1
@@ -146,6 +168,31 @@ export async function discoverMovies(
   }
 
   return movies.slice(0, maxResults)
+}
+
+export async function discoverMovies(
+  serviceIds: ServiceId[],
+  filters: DiscoverFilters,
+  maxResults = 60
+): Promise<TmdbMovie[]> {
+  const primary = await discoverPages(serviceIds, filters, maxResults)
+
+  // A depth band intersected with strict genre/rating/provider filters can come
+  // back nearly empty. Rather than 422 the room, back-fill with the band removed
+  // (the prior default floor) and merge — banded picks first, deduped by id.
+  if (filters.depth == null || primary.length >= MIN_BACKFILL_RESULTS) {
+    return primary
+  }
+
+  const backfill = await discoverPages(serviceIds, { ...filters, depth: undefined }, maxResults)
+  const seen = new Set(primary.map((m) => m.tmdbId))
+  const merged = [...primary]
+  for (const movie of backfill) {
+    if (seen.has(movie.tmdbId)) continue
+    seen.add(movie.tmdbId)
+    merged.push(movie)
+  }
+  return merged.slice(0, maxResults)
 }
 
 export async function getMovieById(tmdbId: string): Promise<TmdbMovie> {

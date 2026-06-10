@@ -2,13 +2,21 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useSession, signIn } from "next-auth/react";
-import { isValidRoomCode } from "@/lib/room-code";
+import { useSession } from "next-auth/react";
+import { isValidRoomCode, generateRoomCode } from "@/lib/room-code";
 import AuthStatus from "@/components/AuthStatus";
+import BrandMark from "@/components/BrandMark";
+import BrandFooter from "@/components/BrandFooter";
+
+const EYEBROW = "text-[11px] font-semibold uppercase tracking-[0.18em] text-faint";
+const FIELD =
+  "w-full rounded-none border border-line bg-surface px-4 py-3 text-ink placeholder-faint focus:border-ink focus:outline-none";
+const CHIP_BTN =
+  "inline-flex items-center justify-center gap-1.5 rounded-none border border-ink px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-ink transition-colors hover:bg-ink hover:text-canvas";
 
 export default function LandingPage() {
   const router = useRouter();
-  const { data: session, status } = useSession();
+  const { data: session } = useSession();
 
   useEffect(() => {
     if (!session?.user?.id) return;
@@ -16,33 +24,72 @@ export default function LandingPage() {
     fetch("/api/auth/link-member", { method: "POST" }).catch(() => {});
   }, [session?.user?.id]);
 
-  const [googleLoading, setGoogleLoading] = useState(false);
+  // One name for the night, shared by create + join.
+  const [name, setName] = useState("");
 
-  async function handleGoogleSignIn() {
-    setGoogleLoading(true);
-    try {
-      await signIn("google", { callbackUrl: "/" });
-    } catch {
-      setGoogleLoading(false);
-    }
-  }
-
-  // Create room state
-  const [createName, setCreateName] = useState("");
-  const [roomName, setRoomName] = useState("");
+  // Pre-generated room code (chosen on the client in an effect to avoid a
+  // hydration mismatch). The create call sends it so Copy Link / Share point at
+  // the room that will actually be created.
+  const [createCode, setCreateCode] = useState<string | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [codeCopied, setCodeCopied] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   // Join room state
   const [joinCode, setJoinCode] = useState("");
-  const [joinName, setJoinName] = useState("");
   const [joinLoading, setJoinLoading] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
 
+  useEffect(() => {
+    const id = setTimeout(() => setCreateCode(generateRoomCode()), 0);
+    return () => clearTimeout(id);
+  }, []);
+
+  const joinUrl =
+    createCode && typeof window !== "undefined"
+      ? `${window.location.origin}/room/${createCode}/lobby`
+      : "";
+
+  async function copyCode() {
+    if (!createCode) return;
+    try {
+      await navigator.clipboard.writeText(createCode);
+      setCodeCopied(true);
+      setTimeout(() => setCodeCopied(false), 1600);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+
+  async function copyLink() {
+    if (!joinUrl) return;
+    try {
+      await navigator.clipboard.writeText(joinUrl);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 1600);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+
+  async function share() {
+    if (!joinUrl) return;
+    try {
+      if (typeof navigator !== "undefined" && navigator.share) {
+        await navigator.share({ title: "Join my movie night on PikFlix", url: joinUrl });
+        return;
+      }
+      await copyLink();
+    } catch {
+      /* user dismissed the sheet */
+    }
+  }
+
   async function handleCreateRoom(e: React.FormEvent) {
     e.preventDefault();
-    if (!createName.trim()) {
-      setCreateError("Please enter your display name.");
+    if (!name.trim()) {
+      setCreateError("Enter your name first.");
       return;
     }
     setCreateLoading(true);
@@ -51,7 +98,7 @@ export default function LandingPage() {
       const res = await fetch("/api/rooms", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ displayName: createName.trim(), name: roomName.trim() }),
+        body: JSON.stringify({ displayName: name.trim(), code: createCode }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -61,7 +108,6 @@ export default function LandingPage() {
       router.push(`/room/${code}/setup`);
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "Failed to create room.");
-    } finally {
       setCreateLoading(false);
     }
   }
@@ -73,8 +119,8 @@ export default function LandingPage() {
       setJoinError("Invalid room code. It should look like BOLD-42.");
       return;
     }
-    if (!joinName.trim()) {
-      setJoinError("Please enter your display name.");
+    if (!name.trim()) {
+      setJoinError("Enter your name first.");
       return;
     }
     setJoinLoading(true);
@@ -83,7 +129,7 @@ export default function LandingPage() {
       const res = await fetch(`/api/rooms/${code}/members`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ displayName: joinName.trim() }),
+        body: JSON.stringify({ displayName: name.trim() }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -92,124 +138,128 @@ export default function LandingPage() {
       router.push(`/room/${code}/lobby`);
     } catch (err) {
       setJoinError(err instanceof Error ? err.message : "Failed to join room.");
-    } finally {
       setJoinLoading(false);
     }
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center bg-gray-950 text-white px-4 py-12">
-      {/* Auth status — top-right */}
-      <div className="fixed top-4 right-4">
-        <AuthStatus />
-      </div>
+    <main className="min-h-screen bg-canvas text-ink">
+      <div className="mx-auto flex min-h-screen w-full max-w-xl flex-col px-5 py-6 sm:px-8">
+        {/* Top bar */}
+        <header className="flex items-center justify-between">
+          <BrandMark size="sm" />
+          <AuthStatus />
+        </header>
 
-      <div className="w-full max-w-md space-y-10">
-        {/* Header */}
-        <div className="text-center space-y-2">
-          <h1 className="text-5xl font-bold tracking-tight">What2Watch</h1>
-          <p className="text-gray-400 text-lg">Find a movie everyone wants to watch</p>
+        {/* Hero */}
+        <div className="mt-16">
+          <h1 className="font-serif text-6xl font-bold leading-none tracking-tight sm:text-7xl">
+            Let&apos;s Pik<span className="text-accent">…</span>
+          </h1>
+          <p className="mt-3 text-sm text-muted">less time piking, more time flixing</p>
         </div>
 
-        {/* Create Room */}
-        <section className="bg-gray-900 rounded-2xl p-6 space-y-4">
-          <h2 className="text-xl font-semibold">Create a Room</h2>
-          <p className="text-gray-400 text-sm">Start a new room as the host and invite your friends.</p>
-          <form onSubmit={handleCreateRoom} className="space-y-3">
-            <input
-              type="text"
-              placeholder="Your display name"
-              value={createName}
-              onChange={(e) => setCreateName(e.target.value)}
-              disabled={createLoading}
-              className="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
-            />
-            <input
-              type="text"
-              placeholder="Room name (optional)"
-              value={roomName}
-              maxLength={60}
-              onChange={(e) => setRoomName(e.target.value)}
-              disabled={createLoading}
-              className="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
-            />
-            {createError && (
-              <p className="text-red-400 text-sm">{createError}</p>
-            )}
-            <button
-              type="submit"
-              disabled={createLoading}
-              className="w-full rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2.5 font-semibold transition-colors"
-            >
-              {createLoading ? "Creating..." : "Create Room"}
+        {/* Name */}
+        <div className="mt-10 space-y-2">
+          <label htmlFor="yourName" className={EYEBROW}>
+            Your name
+          </label>
+          <input
+            id="yourName"
+            type="text"
+            placeholder="Who's watching tonight?"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className={FIELD}
+          />
+        </div>
+
+        <div className="my-9 h-px bg-ink/80" />
+
+        {/* Create a room */}
+        <form onSubmit={handleCreateRoom} className="space-y-4">
+          <div>
+            <h2 className="font-serif text-2xl font-bold">Create a room</h2>
+            <p className="mt-1 text-sm text-muted">
+              A room code and invite link are ready to share with your group.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="flex-1 rounded-none border border-line bg-surface-soft px-4 py-3 font-mono text-base font-semibold tracking-[0.2em] text-ink">
+              {createCode ?? "········"}
+            </span>
+            <button type="button" onClick={copyCode} className={CHIP_BTN}>
+              {codeCopied ? "Copied" : "Copy code"}
             </button>
-          </form>
-        </section>
+          </div>
 
-        <div className="flex items-center gap-4">
-          <div className="flex-1 h-px bg-gray-800" />
-          <span className="text-gray-600 text-sm">or</span>
-          <div className="flex-1 h-px bg-gray-800" />
+          <div className="flex items-center gap-2">
+            <span className="flex-1 truncate rounded-none border border-line bg-surface px-4 py-3 text-sm text-muted">
+              {createCode ? `…/room/${createCode}/lobby` : "…"}
+            </span>
+            <button
+              type="button"
+              onClick={copyLink}
+              className="inline-flex items-center gap-1.5 rounded-none border border-accent bg-accent px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-accent-ink transition-opacity hover:opacity-90"
+            >
+              {linkCopied ? "Copied" : "Copy link"}
+            </button>
+            <button type="button" onClick={share} className={CHIP_BTN}>
+              Share
+            </button>
+          </div>
+
+          {createError && <p className="text-sm font-medium text-accent">{createError}</p>}
+
+          <button
+            type="submit"
+            disabled={createLoading || !createCode}
+            className="w-full rounded-none bg-ink px-6 py-4 text-sm font-semibold uppercase tracking-[0.14em] text-canvas transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:bg-faint/50"
+          >
+            {createLoading ? "Creating…" : "Create room →"}
+          </button>
+        </form>
+
+        {/* OR */}
+        <div className="my-9 flex items-center gap-4">
+          <div className="h-px flex-1 bg-line" />
+          <span className={EYEBROW}>or</span>
+          <div className="h-px flex-1 bg-line" />
         </div>
 
-        {/* Join Room */}
-        <section className="bg-gray-900 rounded-2xl p-6 space-y-4">
-          <h2 className="text-xl font-semibold">Join a Room</h2>
-          <p className="text-gray-400 text-sm">Enter the room code shared by your host.</p>
-          <form onSubmit={handleJoinRoom} className="space-y-3">
+        {/* Join a room */}
+        <form onSubmit={handleJoinRoom} className="space-y-4">
+          <div>
+            <h2 className="font-serif text-2xl font-bold">Join a room</h2>
+            <p className="mt-1 text-sm text-muted">
+              Got a code from a friend? Enter it below to jump in.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
             <input
               type="text"
-              placeholder="Room code (e.g. BOLD-42)"
+              placeholder="e.g. BOLD-42"
               value={joinCode}
               onChange={(e) => setJoinCode(e.target.value)}
-              disabled={joinLoading}
-              className="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 uppercase"
+              className={`${FIELD} flex-1 uppercase tracking-[0.2em]`}
             />
-            <input
-              type="text"
-              placeholder="Your display name"
-              value={joinName}
-              onChange={(e) => setJoinName(e.target.value)}
-              disabled={joinLoading}
-              className="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
-            />
-            {joinError && (
-              <p className="text-red-400 text-sm">{joinError}</p>
-            )}
             <button
               type="submit"
               disabled={joinLoading}
-              className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2.5 font-semibold transition-colors"
+              className="rounded-none bg-accent px-6 py-3 text-sm font-semibold uppercase tracking-[0.12em] text-accent-ink transition-opacity hover:opacity-90 disabled:opacity-50"
             >
-              {joinLoading ? "Joining..." : "Join Room"}
+              {joinLoading ? "Joining…" : "Join →"}
             </button>
-          </form>
-        </section>
+          </div>
+          {joinError && <p className="text-sm font-medium text-accent">{joinError}</p>}
+        </form>
 
-        {/* Google sign-in — only shown when signed out */}
-        {status !== "authenticated" && (
-          <>
-            <div className="flex items-center gap-4">
-              <div className="flex-1 h-px bg-gray-800" />
-              <span className="text-gray-600 text-sm">or</span>
-              <div className="flex-1 h-px bg-gray-800" />
-            </div>
+        <div className="my-9 h-px bg-line" />
 
-            <button
-              onClick={handleGoogleSignIn}
-              disabled={googleLoading}
-              className="w-full rounded-xl border border-gray-700 bg-transparent hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3 font-medium text-white transition-colors flex items-center justify-center gap-3"
-            >
-              <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
-                <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
-                <path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
-                <path d="M3.964 10.706A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.706V4.962H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.038l3.007-2.332z" fill="#FBBC05"/>
-                <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.962L3.964 7.294C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
-              </svg>
-              {googleLoading ? "Redirecting..." : "Continue with Google"}
-            </button>
-          </>
-        )}
+        <div className="mt-auto pb-2">
+          <BrandFooter />
+        </div>
       </div>
     </main>
   );

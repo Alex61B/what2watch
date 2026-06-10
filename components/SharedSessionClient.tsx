@@ -19,18 +19,18 @@ export default function SharedSessionClient({ friendId, roomId }: { friendId: st
       .catch(() => setMovies([]))
   }, [friendId, roomId])
 
-  if (forbidden) return <p className="text-gray-400">You are not friends with this user.</p>
-  if (movies === null) return <p className="text-gray-400">Loading…</p>
-  if (movies.length === 0) return <p className="text-gray-400 text-sm">You both said yes to nothing in this session.</p>
+  if (forbidden) return <p className="text-muted">You are not friends with this user.</p>
+  if (movies === null) return <p className="text-muted">Loading…</p>
+  if (movies.length === 0) return <p className="text-muted text-sm">You both said yes to nothing in this session.</p>
 
   return (
     <ul className="grid grid-cols-2 sm:grid-cols-3 gap-4">
       {movies.map(m => (
-        <li key={m.tmdbMovieId} className="bg-gray-900 rounded-xl overflow-hidden">
+        <li key={m.tmdbMovieId} className="bg-surface rounded-xl overflow-hidden">
           {m.posterUrl
             // eslint-disable-next-line @next/next/no-img-element
             ? <img src={m.posterUrl} alt={m.title} className="w-full aspect-[2/3] object-cover" />
-            : <div className="w-full aspect-[2/3] bg-gray-800" />}
+            : <div className="w-full aspect-[2/3] bg-surface-soft" />}
           <p className="p-3 text-sm">{m.title}</p>
         </li>
       ))}
