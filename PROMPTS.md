@@ -2,6 +2,32 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-10 — Seed script for test profiles + sample data
+
+**Prompt (summary):** Create login-able profiles + sample data so multi-user flows (starting a room
+needs ≥2 members), profiles, and friend-comparison can be tested without manual setup.
+
+**Approach:** New idempotent `prisma/seed.ts`, run via
+`TS_NODE_COMPILER_OPTIONS='{"module":"commonjs","moduleResolution":"node"}' npx ts-node --transpile-only prisma/seed.ts`
+(no `package.json` change). Creates 4 credential users (alice/bob/carol/dave `@test.dev`, password
+`password123`, `bcrypt.hash(pw, 12)` matching `app/api/auth/signup`) with real `savedServices` +
+`savedFilters` (`DiscoverFilters` shape). Fetches 12 canonical movies live from TMDB into `MovieCache`
+(real poster paths, mirroring `lib/tmdb`'s image base). Seeds overlapping `UserMoviePreference`
+watchlist/seen rows + a friendship graph (Alice/Bob/Carol ACCEPTED trio, Carol↔Dave ACCEPTED,
+Dave→Alice PENDING). All writes are upserts on unique keys → safe to re-run. Loads `.env.local` via
+`dotenv` then dynamically imports `../lib/prisma` so the pg Pool sees `DATABASE_URL`; relative imports
+avoid the `@/` alias under ts-node.
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 189 Jest tests (29 suites). Seed
+executed against the dev DB: 4 users, 12 `MovieCache` rows (real titles/years), watch/seen prefs, and
+5 friendships created.
+
+**Follow-up:** added a `db:seed` script to `package.json` (explicitly authorized — restricted file) so
+the seed runs via `npm run db:seed`. Drift note: resetting `.workflow_plan_files` orphaned the
+uncommitted `prisma/seed.ts` → `.workflow_drift` blocked all mutating tools; recovered via
+`advance_state.sh drift-to-plan` (run by user), then re-planned both files. Verified: `npm run db:seed`
+re-ran cleanly (idempotent), `verify.sh` green.
+
 ## 2026-06-10 — Collapse list filters behind a "Filters" toggle
 
 **Prompt (summary):** Keep the search box always visible, but put the filter options (sort / min

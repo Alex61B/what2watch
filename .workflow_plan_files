@@ -1,2 +1,2 @@
-components/MovieListClient.tsx
-__tests__/components/MovieListClient.test.tsx
+prisma/seed.ts
+package.json
