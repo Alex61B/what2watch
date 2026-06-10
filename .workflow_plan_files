@@ -1,6 +1,8 @@
 __tests__/api/requeue.test.ts
 __tests__/api/watched.test.ts
 __tests__/api/votes.test.ts
+__tests__/api/start.test.ts
+__tests__/api/queue-route.test.ts
 __tests__/components/MatchResult.test.tsx
 app/api/rooms/[code]/requeue/route.ts
 components/BrandFooter.tsx
