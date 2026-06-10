@@ -27,6 +27,27 @@ export default function LandingPage() {
   // One name for the night, shared by create + join.
   const [name, setName] = useState("");
 
+  // Pre-fill the name from the signed-in user's profile (still editable). Only
+  // sets when the field is untouched, so it never clobbers what the user typed.
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/user/preferences");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled || typeof data.displayName !== "string" || !data.displayName) return;
+        setName((prev) => (prev ? prev : data.displayName));
+      } catch {
+        // best-effort prefill
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user?.id]);
+
   // Pre-generated room code (chosen on the client in an effect to avoid a
   // hydration mismatch). The create call sends it so Copy Link / Share point at
   // the room that will actually be created.

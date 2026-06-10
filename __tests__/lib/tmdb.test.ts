@@ -1,4 +1,4 @@
-import { buildDiscoverUrl, parseMovieResult, parseWatchProviders, STREAMING_SERVICES } from '@/lib/tmdb'
+import { buildDiscoverUrl, buildStreamingUrl, parseMovieResult, parseWatchProviders, STREAMING_SERVICES } from '@/lib/tmdb'
 
 describe('STREAMING_SERVICES', () => {
   it('contains exactly 6 services each with id, name, and tmdbId', () => {
@@ -79,6 +79,56 @@ describe('buildDiscoverUrl — depth → review-count band', () => {
     })
     const sorted = [...floors].sort((a, b) => b - a)
     expect(floors).toEqual(sorted) // strictly descending floors
+  })
+})
+
+describe('buildStreamingUrl', () => {
+  it('builds a Netflix search link from the live provider name', () => {
+    expect(buildStreamingUrl({ providerName: 'Netflix', title: 'Parasite' })).toBe(
+      'https://www.netflix.com/search?q=Parasite'
+    )
+  })
+
+  it('matches name variants ("Amazon Prime Video" → primevideo)', () => {
+    expect(buildStreamingUrl({ providerName: 'Amazon Prime Video', title: 'Heat' })).toBe(
+      'https://www.primevideo.com/search?phrase=Heat'
+    )
+  })
+
+  it('maps "Disney Plus", "Apple TV Plus", and "Max" variants', () => {
+    expect(buildStreamingUrl({ providerName: 'Disney Plus', title: 'Up' })).toBe(
+      'https://www.disneyplus.com/search?q=Up'
+    )
+    expect(buildStreamingUrl({ providerName: 'Apple TV Plus', title: 'CODA' })).toBe(
+      'https://tv.apple.com/search?term=CODA'
+    )
+    expect(buildStreamingUrl({ providerName: 'Max', title: 'Dune' })).toBe(
+      'https://play.max.com/search?q=Dune'
+    )
+  })
+
+  it('falls back to the internal service id when no provider name is given', () => {
+    expect(buildStreamingUrl({ serviceId: 'hulu', title: 'Nomadland' })).toBe(
+      'https://www.hulu.com/search?q=Nomadland'
+    )
+  })
+
+  it('prefers the provider name over the stored service id', () => {
+    expect(buildStreamingUrl({ providerName: 'Netflix', serviceId: 'hulu', title: 'Roma' })).toBe(
+      'https://www.netflix.com/search?q=Roma'
+    )
+  })
+
+  it('url-encodes the title', () => {
+    expect(buildStreamingUrl({ serviceId: 'netflix', title: 'Mad Max: Fury Road' })).toBe(
+      'https://www.netflix.com/search?q=Mad%20Max%3A%20Fury%20Road'
+    )
+  })
+
+  it('returns null when nothing maps to a known service', () => {
+    expect(buildStreamingUrl({ providerName: 'Peacock', title: 'Nope' })).toBeNull()
+    expect(buildStreamingUrl({ serviceId: 'peacock', title: 'Nope' })).toBeNull()
+    expect(buildStreamingUrl({ title: 'Nope' })).toBeNull()
   })
 })
 

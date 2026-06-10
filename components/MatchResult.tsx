@@ -2,7 +2,7 @@ import Image from 'next/image'
 import Link from 'next/link'
 import BrandMark from '@/components/BrandMark'
 import BrandFooter from '@/components/BrandFooter'
-import { STREAMING_SERVICES, TMDB_GENRES } from '@/lib/tmdb'
+import { STREAMING_SERVICES, TMDB_GENRES, buildStreamingUrl } from '@/lib/tmdb'
 
 interface ResultMovie {
   title: string
@@ -58,7 +58,14 @@ export default function MatchResult({ code, movie, members }: MatchResultProps) 
     providerName ??
     (movie.streamingService ? SERVICE_NAMES.get(movie.streamingService) : undefined) ??
     'your service'
-  const watchLink = movie.watchProviders?.link ?? movie.watchUrl ?? null
+  // Prefer a deep link into the actual streaming service; only fall back to the
+  // TMDB watch link when we can't recognise the service.
+  const serviceUrl = buildStreamingUrl({
+    providerName,
+    serviceId: movie.streamingService,
+    title: movie.title,
+  })
+  const watchLink = serviceUrl ?? movie.watchProviders?.link ?? movie.watchUrl ?? null
 
   return (
     <main className="min-h-screen bg-canvas text-ink">

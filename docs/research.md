@@ -1,98 +1,94 @@
-# Research — Route-handler unit tests for requeue / watched / votes
+# Research — Streaming links, prefilled name, second-user "loading movies…" hang
 
-Add the recommendation-#4 coverage: unit tests for three server routes whose branching is currently
-untested. The concurrency-hardening commit (`7e6efb9`) added match/queue/join-approval/rooms-session/
-poll-members/room-code-collision tests; this cycle covers the still-untested `requeue`, `watched`,
-and `votes` handlers against their current (post-hardening) behaviour. **Additive only — no
-production changes.**
+Three independent requests in one cycle:
+
+1. **Streaming redirect** — the "Watch on …" button on the match screen should open the actual streaming service (Netflix, etc.), not the TMDB website.
+2. **Prefilled name** — when the user is signed in, pre-populate the name field on the home and lobby join forms (still editable).
+3. **Bug: second user stuck on "Loading movies…"** — after the host starts a room, opening the shared link as a new user hangs forever on the vote screen's spinner.
+
+---
 
 ## 1. Requirements Summary
 
-- **`POST /api/rooms/[code]/requeue`** — host-only mid-session rebuild.
-  - Position math: VOTING appends after the current card (`startPos = currentPosition + 1`, keeps
-    `position < startPos`, deletes/​replaces `>= startPos`); DRAINED fills the empty current slot
-    (`startPos = currentPosition`), flips status back to VOTING, sets `currentPosition = startPos`.
-  - Exclusion: discovered movies already rejected (down-votes), already kept (`position < startPos`),
-    or watched (when `watchedFilter`) are filtered out.
-  - No-fresh branch: returns `{ requeued: false, added: 0 }` and does not mutate the queue.
-  - Bumps `queueVersion` (increment) on success.
-  - Guards: 401 (no session), 403 (non-host), 404 (room mismatch), 409 (not VOTING/DRAINED),
-    400 (no valid streaming services).
-- **`POST /api/rooms/[code]/watched`** — seen-it / "Skip the Reruns".
-  - `watchedFilter` ON + marked movie is the current card → calls `advanceQueueAtomic`, `removed:true`.
-  - `watchedFilter` ON + marked movie is NOT current → records only, `removed:false`.
-  - `watchedFilter` OFF → records only, `removed:false`.
-  - Always upserts a `watchedMovie`; the `SEEN_BEFORE` hook is best-effort (a throw must not fail it).
-  - Guards: 401 (no session / member), 404 (room mismatch), 400 (missing `tmdbMovieId`).
-- **`POST /api/rooms/[code]/votes`** — main vote flow (only the pending-member 403 is covered today
-  inside `join-approval.test.ts`).
-  - Stale vote → 409 when the submitted movie isn't the (freshly re-read) current card.
-  - No-vote → `advanceQueueAtomic`, `{ matched: false, advance }`.
-  - Yes-vote, no match → `{ matched: false }`.
-  - Yes-vote, match → `{ matched: true, movie, advance }`, movie hydrated from `getMovieById` +
-    queue entry's `watchUrl`/`streamingService`.
-  - Guards: 401, 403 (left/unapproved), 404, 409 (not VOTING), 400 (missing fields).
+### R1 — Streaming service redirect
+The match-result page (`components/MatchResult.tsx`) renders a "● Watch on {service}" CTA. Today its `href` is a TMDB URL:
 
-## 2. Stack Choices
+```
+const watchLink = movie.watchProviders?.link ?? movie.watchUrl ?? null   // MatchResult.tsx:61
+```
 
-Reuse the established route-test pattern (`__tests__/api/room-code-collision.test.ts`,
-`rooms-session.test.ts`, `join-approval.test.ts`):
+- `watchProviders.link` → TMDB/JustWatch redirect `https://www.themoviedb.org/movie/{id}/watch?locale=US`
+- `watchUrl` → `https://www.themoviedb.org/movie/{id}` (stored at queue build: `start/route.ts:90`, `requeue/route.ts:119`)
 
-- `@jest-environment node` docblock; call the exported `POST` directly with
-  `ctx = { params: Promise.resolve({ code }) }`.
-- Mock `@/lib/prisma` with an in-memory store (module-level `let`s reset in `beforeEach`); mock
-  `next/headers` `cookies()` with a `jar` Map and drive auth via `sessionCookieName(code)` (real
-  `@/lib/session`).
-- Per route:
-  - **requeue** — mock `@/lib/tmdb` (real-shaped `STREAMING_SERVICES`, `type` re-exports, `jest.fn`
-    `discoverMovies`); `$transaction` is the **array** form → mock as `(ops) => Promise.all(ops)`.
-  - **watched** — mock `@/lib/queue` (`advanceQueueAtomic` → controlled `AdvanceResult`),
-    `@/lib/link` + `@/lib/preferences` (avoid pulling NextAuth ESM through the hook path).
-  - **votes** — mock `@/lib/queue`, `@/lib/match` (`checkForMatch`), `@/lib/tmdb` (`getMovieById`),
-    `@/lib/link`, `@/lib/preferences`.
-- Assert sets / position ranges, never shuffle order (routes use `Math.random`).
+Both land on TMDB. The user wants the button to open the real service (e.g. `netflix.com`). TMDB does **not** expose stable per-title deep links to Netflix/Prime/etc., so the realistic best-effort is a **title-search deep link into the matched service** (e.g. `https://www.netflix.com/search?q=Parasite`).
+
+### R2 — Prefilled name when signed in
+Two name inputs, both editable:
+- Home page `app/page.tsx:28` — shared `name` state for create + join (input at :167).
+- Lobby page `app/room/[code]/lobby/page.tsx:42` — `joinName` (input at :192).
+
+When signed in, the field should arrive populated with the user's display name; the user can overwrite it.
+
+### R3 — Second user hang (the bug)
+A new user who opens the shared link (`/room/{code}/lobby`) after the room is in `VOTING` is immediately redirected to `/room/{code}/vote` **before joining**, never gets a session cookie, and the vote page's poll 401s forever → "Loading movies…" never clears.
+
+---
+
+## 2. Stack Choices (existing patterns to leverage)
+
+- **Streaming map:** `lib/tmdb.ts` already owns `STREAMING_SERVICES` (id → name → tmdbId) and is already imported by `MatchResult.tsx`. Add a pure `buildStreamingUrl()` helper there; no new file or dependency.
+- **Name source:** `app/api/user/preferences` already runs `auth()` and reads the `User` row, and its `PUT` already accepts `displayName`. Extend its `GET` to also return `displayName` (authoritative, reflects profile/settings). This avoids touching the restricted `auth.ts` and works for both pages without wiring `useSession()` into the lobby (a 401 from the endpoint simply means "anonymous → don't prefill").
+- **Redirect gating:** the existing GET `/api/rooms/[code]` already returns `currentMemberId` (null for non-members). Use it to gate the lobby redirect. No API change needed for the bug fix.
+- **Tests:** Jest + Testing Library already cover `MatchResult` and `lib/tmdb`. Update/extend those.
+
+---
 
 ## 3. Environment Verification
 
-- Read the current `requeue`/`watched`/`votes` handlers (post-`7e6efb9`); votes now re-reads
-  `currentPosition`/`queueVersion` after body-parse (`fresh`), so the mock's `room.findUnique` must
-  return the live position both times.
-- Confirmed the in-memory-prisma + cookie-jar pattern runs under the existing `next/jest` config
-  with no DB/TMDB key (room-code-collision, rooms-session, join-approval all pass this way).
-- Full suite currently green at 125; new files are additive and must keep it green.
-- No `.env`, auth, schema, migration, or package changes.
+- `TMDB_API_KEY` is read in `lib/tmdb.ts:88` (already working — discover/match flows function for the host today). No new env needed.
+- No new packages, no schema/migration changes. `RoomQueue.streamingService` and `watchUrl` already exist and stay as-is.
+- Auth unchanged: `session.strategy = 'jwt'`; `User.displayName` already populated on signup (`auth.ts:13-19`, credentials `authorize` returns `name: user.displayName` at :50).
+- `.env.local` is open in the IDE but **must not be edited** (restricted) — no change required for any of these tasks.
+
+---
 
 ## 4. Risks & Edge Cases
 
-- **`$transaction` two forms**: requeue uses the array form (`Promise.all`); watched/votes use none
-  (advanceQueueAtomic is mocked). Mock the array form only where needed.
-- **`{ increment: 1 }`**: the requeue room-update mock must interpret increment objects, not assign
-  them literally (assert `queueVersion` rose / `currentPosition` set on DRAINED).
-- **Skip-reruns advances only on the current card**: include the "marked a non-current movie → no
-  advance" case so the branch isn't tested vacuously.
-- **NextAuth ESM**: mock `@/lib/link` + `@/lib/preferences` (and `@/lib/match`/`@/lib/tmdb` for
-  votes) or the import throws under Jest.
-- **Best-effort hook**: making `addPreference` reject must still yield `{ ok: true }` (watched) and a
-  normal vote response (votes).
+- **R1 provider-name variance:** TMDB provider names vary ("Amazon Prime Video", "Disney Plus", "Apple TV Plus", "HBO Max"/"Max"). The helper must match by keyword/substring (lowercased) and also accept the internal `STREAMING_SERVICES` id as a fallback. `RoomQueue.streamingService` is only `serviceIds[0]` (`start/route.ts:89`), i.e. the *first selected* service, not necessarily where the title actually streams — so prefer the live `watchProviders.providers[0].name`, fall back to the stored id, then to the TMDB link if nothing maps.
+- **R1 unmatched service:** if no provider maps (unknown service / no providers returned), fall back to the existing TMDB link / "Check {service} for availability" so the CTA never breaks.
+- **R1 existing tests:** `__tests__/components/MatchResult.test.tsx:54-76` assert the TMDB href. They must be updated to assert the new service URL (otherwise verify.sh fails).
+- **R2 clobbering input:** prefill must not overwrite text the user already typed — only set when the field is still empty. Guard with a one-shot effect / empty-check.
+- **R2 anonymous users:** `GET /api/user/preferences` 401s when signed out — swallow and leave the field empty.
+- **R3 mid-session join is pending-approval:** joining while `VOTING` creates an unapproved member (`members/route.ts:45`). After the fix the joiner should be routed to `/vote`, which already renders the "Waiting for the host…" screen (`vote/page.tsx:254`) and the host already sees the approval prompt (`vote/page.tsx:317`). So the fix must **redirect after a successful join**, not only suppress the premature redirect.
+- **R3 polling path is already safe:** the lobby's 3s poll calls `/poll`, which 401s for non-members and returns early (`lobby:88`), so it never redirects a non-member. The *only* offending redirect is in the initial `loadRoom` (`lobby:73`), which uses `/api/rooms/[code]` (no auth) and fires regardless of membership.
+- **Client-component testing:** the lobby fix lives in a client component; jsdom lacks `fetch`/`Response`, so a full lobby render test is heavy. Lean on manual verification for the redirect flow; keep automated coverage on the pure/route-level pieces.
+
+---
 
 ## 5. Assumptions & Open Questions
 
-- Testing at the route-handler seam (not the React pages) satisfies the "#4 route tests" ask.
-- Mocking `advanceQueueAtomic`/`checkForMatch` is acceptable — each has its own unit suite
-  (`queue.test.ts`, `match.test.ts`); these assert the route's branching, not queue/match internals.
-- Purely additive: three new `__tests__/api/*.test.ts` files; no production edits.
-- The prior-cycle untracked files (requeue route, redesign components, MatchResult test) are listed
-  in the manifest for drift-safety.
+- **Assumption (R1):** A title-search URL into the service is acceptable as "redirect to Netflix" (no public per-title deep-link API exists). Region is US (matches `watch_region: 'US'` in `buildDiscoverUrl`).
+- **Assumption (R2):** The authoritative name to prefill is `User.displayName` (what the user manages in profile settings), not the per-room display name.
+- **Assumption (R3):** A new user opening a `VOTING` room link *should* be allowed to join (mid-session join with host approval is an intended, already-built feature). The fix surfaces the existing join form rather than blocking.
+- **Resolved:** `session.user.name` may or may not be reliably populated across providers; sidestepped by reading `displayName` from the DB via the preferences endpoint.
+
+---
 
 ## 6. Out of Scope
 
-- React page/component tests (vote/setup/lobby/match) — hard to test, excluded.
-- The already-covered routes (match/queue/join-approval/rooms-session/poll-members/room-code).
-- `start`, `queue` (GET), friends/*, user/*, auth/* route tests.
-- Any production code, schema, or config change.
+- No changes to `auth.ts`, `app/api/auth/*`, session strategy, or any `.env*` file.
+- No Prisma schema or migration changes; `RoomQueue.watchUrl`/`streamingService` columns are kept.
+- No real per-title streaming deep links via a third-party availability API (only search-deep-links).
+- No redesign of the lobby/vote/match UI beyond the targeted fixes.
+- No change to `requeue`/`start` URL persistence (the link is computed at render time from provider data).
+
+---
 
 ## 7. Readiness Verdict: READY FOR PLANNING
 
-Three additive `@jest-environment node` test files (`requeue`, `watched`, `votes`) using the
-established prisma/cookie mock harness, asserting each handler's branches against the current code.
-**READY FOR PLANNING.**
+Root causes confirmed by reading source:
+- R1 → `MatchResult.tsx:61` (+ `lib/tmdb.ts` for the helper).
+- R2 → `app/page.tsx`, `app/room/[code]/lobby/page.tsx`, `app/api/user/preferences/route.ts`.
+- R3 → `app/room/[code]/lobby/page.tsx:73` (premature redirect before join) + add post-join redirect.
+
+Anticipated files to touch (finalized in PLAN): `lib/tmdb.ts`, `components/MatchResult.tsx`, `app/api/user/preferences/route.ts`, `app/page.tsx`, `app/room/[code]/lobby/page.tsx`, `__tests__/components/MatchResult.test.tsx`, `__tests__/lib/tmdb.test.ts`.

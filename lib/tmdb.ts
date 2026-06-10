@@ -244,3 +244,47 @@ export async function getWatchProviders(
   const data = await tmdbFetch<Record<string, unknown>>(buildWatchProvidersUrl(tmdbId))
   return parseWatchProviders(data, region)
 }
+
+// Each service's title-search deep link. TMDB exposes no stable per-title URL on
+// the service itself, so opening the service's search for the title is the
+// closest "take me to Netflix" behaviour we can offer.
+const STREAMING_SEARCH_URLS: Record<ServiceId, (encodedTitle: string) => string> = {
+  netflix: (t) => `https://www.netflix.com/search?q=${t}`,
+  prime: (t) => `https://www.primevideo.com/search?phrase=${t}`,
+  disney: (t) => `https://www.disneyplus.com/search?q=${t}`,
+  hbo: (t) => `https://play.max.com/search?q=${t}`,
+  hulu: (t) => `https://www.hulu.com/search?q=${t}`,
+  apple: (t) => `https://tv.apple.com/search?term=${t}`,
+}
+
+// Match the live (and inconsistently named) TMDB provider string —
+// "Amazon Prime Video", "Disney Plus", "Apple TV Plus", "Max" … — to our id.
+function serviceIdFromProviderName(name: string): ServiceId | null {
+  const n = name.toLowerCase()
+  if (n.includes('netflix')) return 'netflix'
+  if (n.includes('prime') || n.includes('amazon')) return 'prime'
+  if (n.includes('disney')) return 'disney'
+  if (n.includes('hbo') || n.includes('max')) return 'hbo'
+  if (n.includes('hulu')) return 'hulu'
+  if (n.includes('apple')) return 'apple'
+  return null
+}
+
+/**
+ * Builds a link that opens the actual streaming service searching for the title,
+ * preferring the live provider name (most accurate) and falling back to the
+ * room's stored service id. Returns null when neither maps to a known service so
+ * the caller can fall back to the TMDB link.
+ */
+export function buildStreamingUrl(opts: {
+  providerName?: string | null
+  serviceId?: string | null
+  title: string
+}): string | null {
+  const { providerName, serviceId, title } = opts
+  const resolved =
+    (providerName ? serviceIdFromProviderName(providerName) : null) ??
+    (serviceId && serviceId in STREAMING_SEARCH_URLS ? (serviceId as ServiceId) : null)
+  if (!resolved) return null
+  return STREAMING_SEARCH_URLS[resolved](encodeURIComponent(title))
+}

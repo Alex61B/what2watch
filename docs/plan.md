@@ -1,126 +1,93 @@
-# Plan — PikFlix editorial UI redesign
+# Plan — Streaming links, prefilled name, second-user hang
 
-Execution plan for the redesign. Build order: (1) tokens/fonts/theme → (2) shared components →
-(3) backend → (4) core screens. Drive serially (no parallel agents — the workflow state is a
-singleton). Every file below is in `.workflow_plan_files`.
+Derived from `docs/research.md`. Three independent changes; each lists the edit, the contract, and an acceptance criterion. Every file below is in `.workflow_plan_files`.
 
-## Design tokens (light = default, editorial)
+---
 
-`app/globals.css` `:root` (light) — retarget to:
+## Task 1 — "Watch on …" opens the real streaming service
+
+### 1a. `lib/tmdb.ts` — add a pure URL builder
+Add an exported helper plus an internal provider→search-URL map:
+
+```ts
+export function buildStreamingUrl(opts: {
+  providerName?: string | null   // live TMDB provider name, e.g. "Amazon Prime Video"
+  serviceId?: string | null      // internal STREAMING_SERVICES id, e.g. "prime"
+  title: string
+}): string | null
 ```
---canvas:       #F4F3EE   /* off-white page */
---surface:      #FFFFFF   /* cards, inputs */
---surface-soft: #EDEBE3   /* inactive chips, slider track, hover, fills */
---line:         #D8D5CC   /* hairline borders */
---ink:          #16130F   /* near-black text + crisp borders/buttons */
---muted:        #5C584F   /* secondary text */
---faint:        #8E897C   /* tertiary text / placeholders */
---accent:       #D0021B   /* red */
---accent-ink:   #FFFFFF   /* text on red */
-color-scheme: light
+
+- Resolve a `serviceId` from `providerName` (lowercased keyword match: `netflix`, `prime|amazon`, `disney`, `hbo|max`, `hulu`, `apple`) → fall back to the passed `serviceId`.
+- Map the resolved id to a title-search deep link (US region), title URL-encoded:
+  - `netflix` → `https://www.netflix.com/search?q={t}`
+  - `prime` → `https://www.primevideo.com/search?phrase={t}`
+  - `disney` → `https://www.disneyplus.com/search?q={t}`
+  - `hbo` → `https://play.max.com/search?q={t}`
+  - `hulu` → `https://www.hulu.com/search?q={t}`
+  - `apple` → `https://tv.apple.com/search?term={t}`
+- Return `null` when nothing maps (caller falls back to the TMDB link).
+- Pure function (no fetch/env) so it is safe to import in the (server) `MatchResult` component and unit-test directly.
+
+### 1b. `components/MatchResult.tsx` — prefer the real service link
+Change the `watchLink` derivation (currently line 61):
+
+```ts
+const serviceUrl = buildStreamingUrl({
+  providerName: movie.watchProviders?.providers?.[0]?.name,
+  serviceId: movie.streamingService,
+  title: movie.title,
+})
+const watchLink = serviceUrl ?? movie.watchProviders?.link ?? movie.watchUrl ?? null
 ```
-`.dark` block stays as-is; add `--accent: #EF4444; --accent-ink:#FFFFFF` so the token resolves.
-`.dual-thumb` thumbs: indigo → `--accent` red. `body { background: var(--canvas); color: var(--ink) }`.
 
-`tailwind.config.ts` — add `colors.accent: { DEFAULT: 'var(--accent)', ink: 'var(--accent-ink)' }`
-and `fontFamily: { sans: ['var(--font-sans)', ...system], serif: ['var(--font-serif)','Georgia','serif'] }`.
+`serviceName` logic is unchanged. CTA markup unchanged.
 
-## Fonts (`app/layout.tsx`)
+### 1c. Tests
+- `__tests__/lib/tmdb.test.ts` — add cases for `buildStreamingUrl`: provider-name match, internal-id fallback, name-variant ("Amazon Prime Video" → primevideo), unknown → null, title encoding.
+- `__tests__/components/MatchResult.test.tsx` — update the two TMDB-href assertions (lines 54-76) to expect the Netflix search URL for the Netflix fixtures; add/keep a fallback case where an unmapped service still yields the TMDB link.
 
-- `next/font/google`: `Inter` (`variable:'--font-sans'`) + `Playfair_Display`
-  (`style:['normal','italic']`, `variable:'--font-serif'`) — no new npm dep.
-- `<body className="${inter.variable} ${playfair.variable} font-sans">`.
-- Flip default theme to **light**: init script adds `.dark` only when `localStorage w2w_theme === 'dark'`
-  (default = light/no class). `metadata.title = 'PikFlix'`.
+**Acceptance:** Given a matched movie on Netflix, the "Watch on Netflix" CTA `href` is `https://www.netflix.com/search?q=Parasite` (not a themoviedb.org URL). An unrecognized service still produces a working CTA via the TMDB fallback.
 
-## Class conventions (apply on core screens + shared components)
+---
 
-- Eyebrow: `text-[11px] font-semibold uppercase tracking-[0.18em] text-faint`.
-- Serif hero/headings: `font-serif` (+ `italic` for accent words, often `text-accent`).
-- Primary button (black): `bg-ink text-canvas font-semibold uppercase tracking-wide rounded-none`.
-- Accent button (red): `bg-accent text-accent-ink ... rounded-none`.
-- Outlined secondary: `border border-ink bg-transparent text-ink rounded-none` (NOPE: `border-accent text-accent`).
-- Disabled primary: `bg-faint/40 text-canvas cursor-not-allowed`.
-- Cards/inputs: `bg-surface border border-line rounded-none`. Selected chip/card: `bg-ink text-canvas` (or `bg-accent`).
-- Sharp corners everywhere on these screens (`rounded-none`); inherited pages keep their radii.
+## Task 2 — Prefill the name when signed in
 
-## Files
+### 2a. `app/api/user/preferences/route.ts` — return `displayName` from GET
+Add `displayName: true` to the `select` and include `displayName` in the JSON response. PUT is unchanged.
 
-### 1. Tokens / theme
-- **app/globals.css** — editorial `:root`, dark `--accent`, red slider thumbs.
-- **tailwind.config.ts** — `accent` color + `fontFamily` serif/sans.
-- **app/layout.tsx** — load Playfair+Inter as vars, default-light init script, `font-sans` body, title.
-- **components/ThemeProvider.tsx** — default `'light'`; init reads `w2w_theme`, light unless `'dark'`.
-- **components/ThemeToggle.tsx** — restyle: small square, `border-ink`, `rounded-none`, sun/moon.
+### 2b. `app/page.tsx` — prefill the shared `name`
+Add an effect: when `session?.user?.id` is present, `GET /api/user/preferences`; on success set `name` to the returned `displayName` **only if the field is still empty** (one-shot guard so it never clobbers typed input). Anonymous → endpoint 401s → leave empty.
 
-### 2. Shared components (new)
-- **components/BrandMark.tsx** — `Pik`(ink)+`Flix`(accent) serif wordmark; props `size`, `tone`
-  ('ink' | 'inverse' for dark hero).
-- **components/BrandFooter.tsx** — `© 2026 PIKFLIX · WHERE DECISIONS GET MADE` eyebrow, centered.
-- **components/RoomCodeBar.tsx** — top chrome: BrandMark left; right = room-code chip + `CODE`/`LINK`
-  (red)/`SHARE` chip-buttons (copy code / copy link / native share). Optional `onEditFilters` makes
-  the code chip a host button. `tone` for dark hero.
-- **components/FilterControls.tsx** — extracted controls (props: values + onChange callbacks):
-  `StreamingServicePicker`, dual rating slider, free-form runtime, genre chips, skip-reruns switch,
-  **cosmetic depth 1–5 selector** (`HOW DEEP ARE WE GOING?` + `LVL n` caption). Pure controlled
-  component; persistence handled by callers (setup PATCHes live; host editor stages then applies).
-- **components/HostFilterEditor.tsx** — modal/sheet over the vote page; loads current room, renders
-  `FilterControls` (staged local state), `Apply` → PATCH `/api/rooms/[code]` then POST
-  `/api/rooms/[code]/requeue`; surfaces "no movies match" message; `Cancel`/backdrop closes.
-- **components/MatchResult.tsx** — rich result layout (dark hero band + BrandMark inverse + `ALL VOTES
-  IN` + serif `Tonight's pick.` + member-initial red squares + `n/n MATCHED`; off-white body: poster,
-  serif title, `YEAR · RUNTIME MIN`, stars + `/10 IMDB`, genre chips from `genreIds`, overview,
-  `THE ROOM` member cards w/ check, `AVAILABLE ON` red `● WATCH ON {SERVICE} ↗` CTA, `PIK AGAIN`,
-  BrandFooter). Props: matched movie, members, code.
+### 2c. `app/room/[code]/lobby/page.tsx` — prefill `joinName`
+Add an effect on mount: `GET /api/user/preferences`; on success set `joinName` to `displayName` **only if still empty**. 401/failure → leave empty (no `useSession` needed). Lives alongside the Task 3 fix in the same file.
 
-### 3. Backend (minimal)
-- **app/api/rooms/[code]/watched/route.ts** — after recording WatchedMovie, if `room.watchedFilter`
-  and the marked id === current `roomQueue[currentPosition]`, call `advanceQueueAtomic(room.id,
-  room.currentPosition, room.queueVersion)` (removes for the whole room, bumps queueVersion). Return
-  `{ ok, removed, advance? }`. OFF → record-only (unchanged).
-- **app/api/rooms/[code]/requeue/route.ts** (new) — host-only, VOTING only. Exclude
-  rejected(vote=false) + positions ≤ currentPosition + (watched whole-room if watchedFilter).
-  `discoverMovies(services, filters, 60)` minus excluded → in a `$transaction`: delete roomQueue
-  positions > currentPosition, `createMany` new at currentPosition+1.. (`skipDuplicates`),
-  `queueVersion: { increment: 1 }`. If 0 new, leave queue, return `{ requeued:false }`.
-- **app/api/rooms/route.ts** — accept optional `body.code`: if `isValidRoomCode` and unused, use it;
-  else fall back to the existing generator loop. Backward compatible.
+**Acceptance:** A signed-in user opening the home page sees their display name pre-filled in "Your name"; opening a room link sees it pre-filled in the join form; both remain editable; a signed-out user sees an empty field.
 
-### 4. Core screens
-- **app/page.tsx** — landing: `SIGN IN` top-right (AuthStatus), serif `Let's Pik…` (red `…`),
-  subtitle, `YOUR NAME` label + "Who's watching tonight?" input (shared name), rule, `Create a room`
-  (serif) + pre-gen code (generated in effect) + Copy Code/Copy Link/Share + black `CREATE ROOM →`,
-  `OR` rule, `Join a room` (serif) + code input + red `JOIN →`, rule, BrandFooter. Create POSTs with
-  pre-gen `code`, navigates using returned code. Keep Google sign-in affordance minimal/below.
-- **app/room/[code]/setup/page.tsx** — `RoomCodeBar` chrome (CODE/LINK/SHARE), `ROOM SETUP` eyebrow +
-  serif `Settle in.` (red italic `in.`), subtitle; members; **remove** "What's on tonight?" &
-  "Fine-tune the evening." headings (keep `REQUIRED · STREAMING SERVICES` / `OPTIONAL · FILTERS`
-  eyebrows); render controls via `FilterControls` (live PATCH on change); name-your-night input;
-  gray disabled `START VOTING ›` until ≥1 service; red error text. Keep ≥1-service requirement.
-- **app/room/[code]/vote/page.tsx** — `RoomCodeBar` (host → opens `HostFilterEditor`); `MOVIE n OF N`
-  + `x remaining` eyebrow row; `VotingCard` with `seen`, `onToggleSeen`, `skipReruns=watchedFilter`.
-  Seen logic: skip-reruns ON → toggle calls `handleMarkWatched` (now removes for room) ; OFF → toggles
-  local `seen`, and on vote-commit if `seen` POST `/watched` (record-only). Reset `seen` per card.
-  Keep pending-approval/roster/drained branches, restyled.
-- **components/VotingCard.tsx** — editorial: poster with `SEEN IT?` toggle pill bottom-right (eye icon,
-  checked style), serif title, `YEAR · RUNTIME MIN`, stars + `{rating} /10 IMDB`, overview, swipe
-  hints (`‹ SWIPE TO PASS  |  SWIPE TO PICK ›`), `NOPE` (outlined red) + `PIK IT` (black) buttons,
-  swipe stamps recolored (PICK=ink, NOPE=accent). New props: `seen`, `onToggleSeen`, `skipReruns`.
-- **app/room/[code]/match/page.tsx** — phase state: show `MatchCelebration` interstitial ~1.8s
-  (timer), then render `MatchResult`. Fetch poll once for matchedMovie + members + name + code.
-- **components/MatchCelebration.tsx** — repurpose as brief full-screen interstitial: serif
-  `It's a match.` (red `match.`), subtle reveal, on canvas. (No longer the final layout.)
-- **app/room/[code]/done/page.tsx** — editorial no-match: eyebrow + serif `No match tonight.`, copy,
-  black `PIK AGAIN` (→ setup), `Back to home`, BrandFooter.
-- **components/DrainedScreen.tsx** — editorial restyle (sharp, ink/accent), keep coming-soon affordance.
-- **app/room/[code]/lobby/page.tsx** — editorial: `RoomCodeBar`/BrandMark, serif room code/name,
-  join form, members via `MemberList`, share, host setup link — restyled to tokens + sharp corners.
-- **components/MemberList.tsx** — editorial member rows (red initial square, check), sharp corners.
-- **components/StreamingServicePicker.tsx** — editorial cards: thin border, colored dot + name,
-  selected = `bg-ink text-canvas` (sharp), keep brand dot color; `X selected` handled by caller.
-- **components/AuthStatus.tsx** — restyle `SIGN IN` as an outlined chip top-right; signed-in state tidy.
+---
 
-## Verification (TEST)
-`bash scripts/verify.sh` → typecheck + lint + jest. Watch for: `react-hooks/set-state-in-effect`
-(use setTimeout pattern for the pre-gen code, placeholder, interstitial timer), `next/image` for any
-poster, escaped entities, no unused imports. Then `advance_state.sh next`.
+## Task 3 — Fix the second-user "Loading movies…" hang
+
+### 3a. `app/room/[code]/lobby/page.tsx` — gate redirect on membership + redirect after join
+1. In `loadRoom` (currently line 73), **only** call `handleRedirect(data.status)` when `data.currentMemberId !== null`. A non-member (no session) stays on the lobby and sees the "Join this room" form even when the room is `VOTING`.
+2. In `handleJoin`, after a successful join + room refetch, call `handleRedirect(data.status)` so a mid-session joiner is routed to `/vote` (which already renders the pending-approval "Waiting for the host…" screen) and a lobby joiner stays put (no-op for `LOBBY`).
+
+The 3s poll effect already 401s for non-members and returns early, so no change needed there.
+
+**Acceptance:** With a room in `VOTING`, opening the shared `/room/{code}/lobby` link as a brand-new browser shows the join form (no infinite spinner); after entering a name and joining, the user lands on `/vote` showing "Waiting for the host…"; the host sees and can accept the join request, after which the joiner's movies load.
+
+---
+
+## Schema changes
+None. No Prisma model or migration changes.
+
+## API changes
+- `GET /api/rooms/[code]` — no change (already returns `currentMemberId`).
+- `GET /api/user/preferences` — response gains `displayName: string`.
+
+## Component changes
+- `components/MatchResult.tsx` — watch CTA href now points to the streaming service.
+- `app/page.tsx` — name field prefilled for signed-in users.
+- `app/room/[code]/lobby/page.tsx` — join-name prefilled; redirect now gated on membership and fired after join.
+
+## Verification (TEST state)
+`bash scripts/verify.sh` → `npm run typecheck` + `npm run lint` + `npm test` must exit 0. The updated/added Jest cases lock R1; R2 and R3 (client-component flows) are confirmed by manual run-through per the acceptance criteria above.

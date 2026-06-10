@@ -51,7 +51,7 @@ describe('MatchResult', () => {
     expect(screen.getByText('Drama')).toBeInTheDocument()
   })
 
-  it('renders a "watch on" CTA that prefers the providers regional link', () => {
+  it('links the "watch on" CTA to the streaming service (not TMDB) using the live provider', () => {
     render(
       <MatchResult
         code="PFLX-42"
@@ -66,13 +66,32 @@ describe('MatchResult', () => {
       />
     )
     const cta = screen.getByRole('link', { name: /watch on netflix/i })
-    expect(cta).toHaveAttribute('href', 'https://www.themoviedb.org/movie/496243/watch?locale=US')
+    expect(cta).toHaveAttribute('href', 'https://www.netflix.com/search?q=Parasite')
   })
 
-  it('falls back to the watchUrl when no provider link is present', () => {
+  it('builds the service link from the stored service id when no providers are present', () => {
     render(<MatchResult code="PFLX-42" movie={baseMovie} members={members} />)
     const cta = screen.getByRole('link', { name: /watch on netflix/i })
-    expect(cta).toHaveAttribute('href', 'https://www.themoviedb.org/movie/496243')
+    expect(cta).toHaveAttribute('href', 'https://www.netflix.com/search?q=Parasite')
+  })
+
+  it('falls back to the TMDB watch link for an unrecognized service', () => {
+    render(
+      <MatchResult
+        code="PFLX-42"
+        movie={{
+          ...baseMovie,
+          streamingService: 'peacock',
+          watchProviders: {
+            providers: [{ name: 'Peacock', logoUrl: '' }],
+            link: 'https://www.themoviedb.org/movie/496243/watch?locale=US',
+          },
+        }}
+        members={members}
+      />
+    )
+    const cta = screen.getByRole('link', { name: /watch on peacock/i })
+    expect(cta).toHaveAttribute('href', 'https://www.themoviedb.org/movie/496243/watch?locale=US')
   })
 
   it('offers a "pik again" link home', () => {

@@ -70,10 +70,14 @@ export default function LobbyPage() {
           return;
         }
         const data: RoomState = await res.json();
-        handleRedirect(data.status);
         setRoom(data);
         setMemberCount(data.members.length);
         setJoined(data.currentMemberId !== null);
+        // Only redirect users who have actually joined (have a session/member).
+        // A new user opening the share link for an in-progress room must see the
+        // join form first — otherwise they're bounced to /vote with no session
+        // and the poll 401s forever ("Loading movies…" never clears).
+        if (data.currentMemberId !== null) handleRedirect(data.status);
       } catch {
         setLoadError("Failed to load room.");
       }
@@ -96,6 +100,26 @@ export default function LobbyPage() {
     return () => clearInterval(interval);
   }, [code, handleRedirect]);
 
+  // Pre-fill the join name from the signed-in user's profile (still editable). A
+  // 401 just means the visitor is anonymous, so the field stays empty.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/user/preferences");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled || typeof data.displayName !== "string" || !data.displayName) return;
+        setJoinName((prev) => (prev ? prev : data.displayName));
+      } catch {
+        // best-effort prefill
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function handleJoin(e: React.FormEvent) {
     e.preventDefault();
     if (!joinName.trim()) return;
@@ -116,8 +140,14 @@ export default function LobbyPage() {
         const data: RoomState = await roomRes.json();
         setRoom(data);
         setMemberCount(data.members.length);
+        setJoined(true);
+        // A mid-session join (room already VOTING) routes to /vote, which shows
+        // the "waiting for the host to approve you" screen; a lobby join is a
+        // no-op here and stays in the lobby.
+        handleRedirect(data.status);
+      } else {
+        setJoined(true);
       }
-      setJoined(true);
     } catch (err) {
       setJoinError(err instanceof Error ? err.message : "Failed to join.");
       setJoinLoading(false);

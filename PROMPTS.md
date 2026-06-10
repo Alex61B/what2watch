@@ -2,6 +2,27 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-10 — Streaming-service links, prefilled name, second-user "loading movies…" hang
+
+**Prompt (summary):** (1) Make the "watch" links redirect to the actual streaming service (e.g.
+Netflix) instead of the TMDB site. (2) Pre-populate the name field with the signed-in user's name
+(still editable). (3) Fix the bug where a second user opening a shared link after the host starts the
+room is stuck forever on "Loading movies…".
+
+**Approach:** (1) New pure `buildStreamingUrl()` in `lib/tmdb.ts` maps the live TMDB provider name
+(or stored service id) to a title-search deep link per service (Netflix/Prime/Disney+/Max/Hulu/Apple
+TV+); `MatchResult.tsx` prefers it, falling back to the TMDB link only for unrecognized services.
+(2) `GET /api/user/preferences` now returns `displayName`; `app/page.tsx` and the lobby page prefill
+the name field from it on mount (one-shot, never clobbers typed input; anonymous 401 → empty).
+(3) Root cause: `lobby/page.tsx` redirected to `/vote` before the visitor joined, so a non-member
+got no session cookie and the poll 401'd forever. Fix: only redirect when `currentMemberId !== null`
+(non-members now see the join form even for in-progress rooms), and redirect *after* a successful
+join so a mid-session joiner lands on the existing host-approval screen.
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 178 Jest tests pass (added
+`buildStreamingUrl` cases, updated `MatchResult` href assertions). R2/R3 are client-flow changes
+confirmed against the documented acceptance criteria in `docs/plan.md`.
+
 ## 2026-06-10 — Route tests for start + queue (GET) handlers
 
 **Prompt (summary):** Add unit tests for the requeue route + the seen-it/skip-reruns vote flow, and
