@@ -1,11 +1,2 @@
-app/api/rooms/[code]/queue/route.ts
-app/api/rooms/[code]/votes/route.ts
-app/api/rooms/[code]/watched/route.ts
-lib/match.ts
-app/room/[code]/vote/page.tsx
-components/VotingCard.tsx
-__tests__/api/queue-route.test.ts
-__tests__/api/votes.test.ts
-__tests__/api/watched.test.ts
-__tests__/lib/match.test.ts
-__tests__/components/VotingCard.test.tsx
+components/MovieListClient.tsx
+__tests__/components/MovieListClient.test.tsx
