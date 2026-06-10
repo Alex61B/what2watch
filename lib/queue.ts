@@ -10,15 +10,6 @@ export async function advanceQueueAtomic(
   expectedPosition: number,
   expectedVersion: number,
 ): Promise<AdvanceResult> {
-  const queueLength = await prisma.roomQueue.count({ where: { roomId } })
-  console.log('[queue]', {
-    roomId,
-    currentPosition: expectedPosition,
-    queueVersion: expectedVersion,
-    queueLength,
-    op: 'advance_attempt',
-  })
-
   const cas = await prisma.room.updateMany({
     where: { id: roomId, currentPosition: expectedPosition, queueVersion: expectedVersion },
     data: {
@@ -28,12 +19,6 @@ export async function advanceQueueAtomic(
   })
 
   if (cas.count === 0) {
-    console.warn('[advanceQueue]', {
-      roomId,
-      oldPosition: expectedPosition,
-      newPosition: expectedPosition,
-      result: 'cas_lost',
-    })
     return { advanced: false, reason: 'CAS_LOST' }
   }
 
@@ -52,29 +37,19 @@ export async function advanceQueueAtomic(
     return { advanced: false, reason: 'ROOM_VANISHED' }
   }
 
+  // Count AFTER the CAS so a concurrent requeue that appended movies is reflected,
+  // and drain via a guarded updateMany so we can never overwrite a status another
+  // request set to MATCHED in the meantime.
+  const queueLength = await prisma.roomQueue.count({ where: { roomId } })
+
   let status: RoomStatus = room.status
   if (room.currentPosition >= queueLength && status === 'VOTING') {
-    await prisma.room.update({
-      where: { id: roomId },
+    const drained = await prisma.room.updateMany({
+      where: { id: roomId, status: 'VOTING', currentPosition: { gte: queueLength } },
       data: { status: 'DRAINED' },
     })
-    status = 'DRAINED'
-    console.log('[queue]', {
-      roomId,
-      currentPosition: room.currentPosition,
-      queueVersion: room.queueVersion,
-      queueLength,
-      op: 'drained_transition',
-    })
+    if (drained.count > 0) status = 'DRAINED'
   }
-
-  console.log('[advanceQueue]', {
-    roomId,
-    oldPosition: expectedPosition,
-    newPosition: room.currentPosition,
-    result: 'advanced',
-    status,
-  })
 
   return {
     advanced: true,

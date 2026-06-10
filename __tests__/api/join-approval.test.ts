@@ -36,8 +36,7 @@ jest.mock('@/lib/prisma', () => {
     (where.leftAt === undefined || m.leftAt === null) &&
     (where.approved === undefined || m.approved === where.approved)
 
-  return {
-    prisma: {
+  const prisma: Record<string, unknown> = {
       room: {
         findUnique: async ({ where }: { where: { code?: string; id?: string } }) =>
           rooms.find(r => (where.code ? r.code === where.code : r.id === where.id)) ?? null,
@@ -76,8 +75,9 @@ jest.mock('@/lib/prisma', () => {
         findUnique: async () => null,
       },
       memberQueue: { createMany: async () => ({ count: 0 }) },
-    },
   }
+  prisma.$transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn(prisma)
+  return { prisma }
 })
 
 jest.mock('@/lib/tmdb', () => ({ getMovieById: jest.fn(async () => ({})) }))

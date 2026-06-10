@@ -29,10 +29,14 @@ export async function checkForMatch(roomId: string, tmdbMovieId: string): Promis
     return null
   }
 
-  await prisma.room.update({
-    where: { id: roomId },
+  // Guard on status so only a room that is still VOTING can transition to MATCHED.
+  // A concurrent request may have already advanced/drained/matched it — never
+  // resurrect a terminal room, and don't report a match we didn't actually write.
+  const updated = await prisma.room.updateMany({
+    where: { id: roomId, status: 'VOTING' },
     data: { status: 'MATCHED', matchedMovieId: tmdbMovieId },
   })
+  if (updated.count === 0) return null
 
   return tmdbMovieId
 }

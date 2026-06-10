@@ -21,54 +21,25 @@ export async function POST(
     stage = 'session'
     const sessionToken = await getSessionToken(code)
     if (!sessionToken) {
-      console.warn('[votes] returning 401', { reason: 'unauthorized_no_session', roomCode })
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     stage = 'member-lookup'
     const member = await prisma.member.findUnique({ where: { sessionToken } })
-    console.log('[votes] member lookup', { roomCode, found: !!member })
     if (!member) {
-      console.warn('[votes] returning 401', { reason: 'unauthorized_no_member', roomCode })
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     if (member.leftAt || !member.approved) {
-      console.warn('[votes] returning 403', {
-        reason: member.leftAt ? 'member_left' : 'member_not_approved',
-        roomCode,
-        memberId: member.id,
-      })
       return NextResponse.json({ error: 'You are not an approved member of this room' }, { status: 403 })
     }
 
-    console.log('[votes] request', {
-      roomCode,
-      memberId: member.id,
-      userId: member.userId,
-      timestamp: new Date().toISOString(),
-    })
-
     stage = 'room-lookup'
     const room = await prisma.room.findUnique({ where: { code } })
-    console.log('[votes] room lookup', { roomCode, found: !!room, status: room?.status ?? null })
     if (!room || room.id !== member.roomId) {
-      console.warn('[votes] returning 404', {
-        reason: 'room_not_found',
-        roomCode,
-        memberId: member.id,
-        memberRoomId: member.roomId,
-        foundRoomId: room?.id ?? null,
-      })
       return NextResponse.json({ error: 'Room not found' }, { status: 404 })
     }
     if (room.status !== 'VOTING') {
-      console.warn('[votes] returning 409', {
-        reason: 'room_wrong_state',
-        roomCode,
-        actual: room.status,
-        required: 'VOTING',
-      })
       return NextResponse.json({ error: 'Room is not in voting state' }, { status: 409 })
     }
 
@@ -76,12 +47,6 @@ export async function POST(
     const body = await request.json().catch(() => ({}))
     const { tmdbMovieId, vote } = body
     if (!tmdbMovieId || typeof vote !== 'boolean') {
-      console.warn('[votes] returning 400', {
-        reason: 'bad_request_missing_field',
-        roomCode,
-        hasTmdbMovieId: typeof tmdbMovieId === 'string',
-        voteType: typeof vote,
-      })
       return NextResponse.json(
         { error: 'tmdbMovieId (string) and vote (boolean) are required' },
         { status: 400 }
@@ -89,34 +54,27 @@ export async function POST(
     }
 
     stage = 'staleness-check'
-    const currentEntry = await prisma.roomQueue.findFirst({
-      where: { roomId: room.id, position: room.currentPosition },
-      select: { tmdbMovieId: true },
+    // Re-read the room's live position/version: it may have advanced while we were
+    // parsing the body. Validate the vote against the card that's actually current
+    // now, and run the CAS advance below against these fresh values.
+    const fresh = await prisma.room.findUnique({
+      where: { id: room.id },
+      select: { currentPosition: true, queueVersion: true, status: true },
     })
-    const queueLength = await prisma.roomQueue.count({ where: { roomId: room.id } })
-    console.log('[queue]', {
-      roomId: room.id,
-      currentPosition: room.currentPosition,
-      queueVersion: room.queueVersion,
-      queueLength,
-      op: 'vote_staleness_check',
+    if (!fresh || fresh.status !== 'VOTING') {
+      return NextResponse.json({ error: 'Room is not in voting state' }, { status: 409 })
+    }
+    const currentEntry = await prisma.roomQueue.findFirst({
+      where: { roomId: room.id, position: fresh.currentPosition },
+      select: { tmdbMovieId: true },
     })
 
     if (!currentEntry || currentEntry.tmdbMovieId !== tmdbMovieId) {
-      console.warn('[votes] returning 409', {
-        reason: 'stale_vote',
-        roomCode,
-        memberId: member.id,
-        submittedMovieId: tmdbMovieId,
-        currentMovieId: currentEntry?.tmdbMovieId ?? null,
-        currentPosition: room.currentPosition,
-        queueVersion: room.queueVersion,
-      })
       return NextResponse.json(
         {
           error: 'Stale vote',
-          currentPosition: room.currentPosition,
-          queueVersion: room.queueVersion,
+          currentPosition: fresh.currentPosition,
+          queueVersion: fresh.queueVersion,
           currentMovieId: currentEntry?.tmdbMovieId ?? null,
         },
         { status: 409 }
@@ -124,12 +82,6 @@ export async function POST(
     }
 
     stage = 'vote-upsert'
-    console.log('[vote]', {
-      roomId: room.id,
-      movieId: tmdbMovieId,
-      vote,
-      memberId: member.id,
-    })
     await prisma.vote.upsert({
       where: { roomId_memberId_tmdbMovieId: { roomId: room.id, memberId: member.id, tmdbMovieId } },
       create: { roomId: room.id, memberId: member.id, tmdbMovieId, vote },
@@ -153,23 +105,12 @@ export async function POST(
 
     if (!vote) {
       stage = 'advance-no'
-      const advance = await advanceQueueAtomic(room.id, room.currentPosition, room.queueVersion)
-      console.log('[votes] advance', {
-        roomId: room.id,
-        trigger: 'no',
-        result: advance.advanced ? 'advanced' : advance.reason.toLowerCase(),
-        memberId: member.id,
-      })
+      const advance = await advanceQueueAtomic(room.id, fresh.currentPosition, fresh.queueVersion)
       return NextResponse.json({ matched: false, advance })
     }
 
     stage = 'check-match'
     const matchedMovieId = await checkForMatch(room.id, tmdbMovieId)
-    console.log('[votes] match check', {
-      roomId: room.id,
-      tmdbMovieId,
-      matched: !!matchedMovieId,
-    })
     if (!matchedMovieId) return NextResponse.json({ matched: false })
 
     stage = 'match-fetch'
@@ -192,13 +133,6 @@ export async function POST(
 
     stage = 'advance-match'
     const advance = await advanceQueueAtomic(room.id, room.currentPosition, room.queueVersion)
-    console.log('[votes] advance', {
-      roomId: room.id,
-      trigger: 'match',
-      result: advance.advanced ? 'advanced' : advance.reason.toLowerCase(),
-      memberId: member.id,
-      matchedMovieId,
-    })
 
     return NextResponse.json({ matched: true, movie: matchedMovie, advance })
   } catch (err) {
