@@ -12,7 +12,7 @@ export default async function SettingsPage() {
   })
 
   return (
-    <main className="min-h-screen bg-gray-950 text-white px-4 py-12">
+    <main className="min-h-screen bg-canvas text-ink px-4 py-12">
       <div className="w-full max-w-md mx-auto space-y-6">
         <ProfileHeader title="Settings" backHref="/profile" backLabel="← Profile" />
         <SettingsClient email={user?.email ?? ''} initialName={user?.displayName ?? ''} />

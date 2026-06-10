@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import BrandFooter from "@/components/BrandFooter";
 
 export default function DonePage() {
   const params = useParams();
@@ -26,31 +27,36 @@ export default function DonePage() {
   }, [code]);
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center bg-gray-950 text-white px-4">
-      <div className="w-full max-w-sm text-center space-y-6">
-        <div className="space-y-3">
-          {roomName && (
-            <p className="text-sm text-gray-400">{roomName}</p>
-          )}
-          <h1 className="text-3xl font-extrabold text-gray-100">No match this time</h1>
-          <p className="text-gray-400">
-            You both ran out of movies to vote on. Try again with different filters!
+    <main className="flex min-h-screen flex-col bg-canvas text-ink">
+      <div className="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center px-5 text-center">
+        {roomName && (
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-faint">
+            {roomName}
           </p>
-        </div>
+        )}
+        <h1 className="mt-2 font-serif text-5xl font-bold leading-none">
+          No match <span className="italic text-accent">tonight.</span>
+        </h1>
+        <p className="mt-4 text-sm text-muted">
+          You ran out of movies to vote on. Loosen the filters and give it another go.
+        </p>
 
         <button
           onClick={() => router.push(`/room/${code}/setup`)}
-          className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 px-6 py-3 text-base font-semibold transition-colors"
+          className="mt-8 w-full rounded-none bg-ink px-6 py-4 text-sm font-semibold uppercase tracking-[0.14em] text-canvas transition-opacity hover:opacity-90"
         >
-          Try Again
+          ↻ Pik again
         </button>
 
         <Link
           href="/"
-          className="block text-sm text-gray-400 hover:text-gray-200 transition-colors underline underline-offset-2"
+          className="mt-4 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted underline-offset-4 hover:text-ink hover:underline"
         >
           Back to home
         </Link>
+      </div>
+      <div className="px-5 pb-6">
+        <BrandFooter />
       </div>
     </main>
   );

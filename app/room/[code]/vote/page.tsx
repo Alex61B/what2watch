@@ -5,6 +5,8 @@ import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import VotingCard from "@/components/VotingCard";
 import DrainedScreen from "@/components/DrainedScreen";
+import RoomCodeBar from "@/components/RoomCodeBar";
+import HostFilterEditor from "@/components/HostFilterEditor";
 
 interface Movie {
   tmdbId: string;
@@ -49,10 +51,10 @@ interface PollResponse {
 
 const POLL_INTERVAL_MS = 1500;
 const VOTE_LOCK_TIMEOUT_MS = 5000;
-// Minimum time the fly-off animation is allowed to play before the next card mounts.
 const EXIT_ANIM_MS = 300;
+const EYEBROW = "text-[11px] font-semibold uppercase tracking-[0.18em] text-faint";
 
-const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export default function VotePage() {
   const router = useRouter();
@@ -64,8 +66,10 @@ export default function VotePage() {
   const [markingWatched, setMarkingWatched] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
   const [approvingId, setApprovingId] = useState<string | null>(null);
-  // Bumped after each resolved vote so the VotingCard remounts fresh and centered,
-  // even when the room stays on the same movie (a YES with no match yet).
+  const [editorOpen, setEditorOpen] = useState(false);
+  // Tracks which movie the user has locally flagged "seen" (so the flag resets
+  // automatically when the card changes).
+  const [seenMovieId, setSeenMovieId] = useState<string | null>(null);
   const [cardKey, setCardKey] = useState(0);
 
   const stoppedRef = useRef(false);
@@ -85,13 +89,8 @@ export default function VotePage() {
       }
       const res = await fetch(`/api/rooms/${code}/poll`, { headers, cache: "no-store" });
       if (res.status === 304) return;
-      if (!res.ok) {
-        console.warn("[client vote poll] non-ok", { code, status: res.status });
-        return;
-      }
+      if (!res.ok) return;
       const data: PollResponse = await res.json();
-      // While waiting on host approval (or after rejection) the queueVersion is
-      // stable but our view still flips, so don't gate those polls with an ETag.
       lastVersionRef.current =
         data.pendingApproval || data.notAdmitted ? null : data.queueVersion;
       setState(data);
@@ -104,37 +103,50 @@ export default function VotePage() {
         stoppedRef.current = true;
         router.replace(`/room/${code}/done`);
       }
-    } catch (err) {
-      console.warn("[client vote poll] threw", { code, err });
+    } catch {
+      // best-effort; next tick retries
     }
   }, [code, router]);
 
-  // Initial fetch + polling loop. The initial call is scheduled via setTimeout so
-  // both invocations are driven by timer callbacks (external system), satisfying
-  // react-hooks/set-state-in-effect.
   useEffect(() => {
-    const initialId = setTimeout(() => {
-      void pollOnce();
-    }, 0);
-    const intervalId = setInterval(() => {
-      void pollOnce();
-    }, POLL_INTERVAL_MS);
+    const initialId = setTimeout(() => void pollOnce(), 0);
+    const intervalId = setInterval(() => void pollOnce(), POLL_INTERVAL_MS);
     return () => {
       clearTimeout(initialId);
       clearInterval(intervalId);
     };
   }, [pollOnce]);
 
+  // Record the seen-it flag (without removing the movie) — used when "Skip the
+  // Reruns" is OFF and the user has checked the box before voting.
+  const recordSeen = useCallback(
+    async (tmdbMovieId: string) => {
+      try {
+        await fetch(`/api/rooms/${code}/watched`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tmdbMovieId }),
+        });
+      } catch {
+        // non-fatal — recording the seen flag is best-effort
+      }
+    },
+    [code]
+  );
+
   const handleVote = useCallback(
     async (vote: boolean) => {
       if (submittingRef.current || !state?.currentMovie) return;
       const tmdbMovieId = state.currentMovie.tmdbId;
+      const wasSeen = seenMovieId === tmdbMovieId;
 
       setSubmitting(true);
       const lockTimeout = setTimeout(() => setSubmitting(false), VOTE_LOCK_TIMEOUT_MS);
 
       try {
         const submit = (async () => {
+          // Skip-reruns OFF: record the seen-it flag alongside the vote.
+          if (wasSeen && !state.watchedFilter) void recordSeen(tmdbMovieId);
           const res = await fetch(`/api/rooms/${code}/votes`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -150,21 +162,22 @@ export default function VotePage() {
           }
           await pollOnce();
         })();
-        // Let the card's fly-off animation play before remounting the next card.
         await Promise.all([submit, sleep(EXIT_ANIM_MS)]);
       } finally {
         clearTimeout(lockTimeout);
         setSubmitting(false);
-        if (!stoppedRef.current) setCardKey(k => k + 1);
+        setSeenMovieId(null);
+        if (!stoppedRef.current) setCardKey((k) => k + 1);
       }
     },
-    [state, code, router, pollOnce]
+    [state, seenMovieId, code, router, pollOnce, recordSeen]
   );
 
-  const handleMarkWatched = useCallback(async () => {
+  // Skip-reruns ON: marking seen removes the movie for the whole room (the
+  // server advances the shared queue).
+  const handleRemoveSeen = useCallback(async () => {
     if (markingWatched || !state?.currentMovie) return;
     const tmdbMovieId = state.currentMovie.tmdbId;
-
     setMarkingWatched(true);
     try {
       await fetch(`/api/rooms/${code}/watched`, {
@@ -175,9 +188,20 @@ export default function VotePage() {
       await pollOnce();
     } finally {
       setMarkingWatched(false);
-      if (!stoppedRef.current) setCardKey(k => k + 1);
+      setSeenMovieId(null);
+      if (!stoppedRef.current) setCardKey((k) => k + 1);
     }
   }, [markingWatched, state, code, pollOnce]);
+
+  const handleToggleSeen = useCallback(() => {
+    const movie = state?.currentMovie;
+    if (!movie) return;
+    if (state?.watchedFilter) {
+      void handleRemoveSeen();
+    } else {
+      setSeenMovieId((prev) => (prev === movie.tmdbId ? null : movie.tmdbId));
+    }
+  }, [state, handleRemoveSeen]);
 
   const handleApproval = useCallback(
     async (memberId: string, action: "accept" | "reject") => {
@@ -197,23 +221,28 @@ export default function VotePage() {
     [approvingId, code, pollOnce]
   );
 
+  const handleFiltersApplied = useCallback(() => {
+    lastVersionRef.current = null; // force a fresh, non-304 poll
+    void pollOnce();
+  }, [pollOnce]);
+
   if (state === undefined) {
     return (
-      <main className="min-h-screen flex items-center justify-center bg-gray-950 text-white px-4">
-        <p className="text-gray-400">Loading movies…</p>
+      <main className="flex min-h-screen items-center justify-center bg-canvas px-4 text-muted">
+        <p>Loading movies…</p>
       </main>
     );
   }
 
   if (state?.notAdmitted) {
     return (
-      <main className="min-h-screen flex flex-col items-center justify-center bg-gray-950 text-white px-4">
-        <div className="w-full max-w-sm text-center space-y-4">
-          <h1 className="text-2xl font-bold text-gray-100">Not admitted</h1>
-          <p className="text-gray-400">The host didn&apos;t admit you to this room.</p>
+      <main className="flex min-h-screen flex-col items-center justify-center bg-canvas px-4 text-ink">
+        <div className="w-full max-w-sm space-y-4 text-center">
+          <h1 className="font-serif text-3xl font-bold">Not admitted</h1>
+          <p className="text-muted">The host didn&apos;t admit you to this room.</p>
           <Link
             href="/"
-            className="inline-block rounded-xl bg-indigo-600 hover:bg-indigo-500 px-6 py-3 text-base font-semibold transition-colors"
+            className="inline-block rounded-none bg-ink px-6 py-3 text-sm font-semibold uppercase tracking-wide text-canvas"
           >
             Back to home
           </Link>
@@ -224,12 +253,10 @@ export default function VotePage() {
 
   if (state?.pendingApproval) {
     return (
-      <main className="min-h-screen flex flex-col items-center justify-center bg-gray-950 text-white px-4">
-        <div className="w-full max-w-sm text-center space-y-3">
-          <h1 className="text-2xl font-bold text-gray-100">Waiting for the host…</h1>
-          <p className="text-gray-400">
-            You&apos;ll join the voting as soon as the host approves you.
-          </p>
+      <main className="flex min-h-screen flex-col items-center justify-center bg-canvas px-4 text-ink">
+        <div className="w-full max-w-sm space-y-3 text-center">
+          <h1 className="font-serif text-3xl font-bold">Waiting for the host…</h1>
+          <p className="text-muted">You&apos;ll join the voting as soon as the host approves you.</p>
         </div>
       </main>
     );
@@ -241,46 +268,67 @@ export default function VotePage() {
 
   if (!state?.currentMovie) {
     return (
-      <main className="min-h-screen flex items-center justify-center bg-gray-950 text-white px-4">
-        <p className="text-gray-400">Waiting for the host to start…</p>
+      <main className="flex min-h-screen items-center justify-center bg-canvas px-4 text-muted">
+        <p>Waiting for the host to start…</p>
       </main>
     );
   }
 
   const members = state.members ?? [];
   const watching = members.length || state.memberCount;
+  const seen = seenMovieId === state.currentMovie.tmdbId;
 
   return (
-    <main className="min-h-screen bg-gray-950 text-white px-4 py-8">
-      <div className="w-full max-w-sm mx-auto space-y-4">
-        <div className="flex items-center justify-between gap-3">
+    <main className="min-h-screen bg-canvas text-ink">
+      <div className="mx-auto w-full max-w-md px-5 py-6 sm:px-6">
+        <RoomCodeBar
+          code={code}
+          onEditFilters={state.isHost ? () => setEditorOpen(true) : undefined}
+        />
+
+        {/* Progress / roster row */}
+        <div className="mt-6 flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="text-lg font-semibold text-gray-200">What2Watch</h1>
-            {state.name && (
-              <p className="truncate text-sm text-gray-400">{state.name}</p>
-            )}
+            <p className={EYEBROW}>Movie {state.currentPosition + 1}</p>
+            <div className="mt-1 h-[3px] w-16 bg-accent" />
           </div>
-          <span className="shrink-0 text-sm text-gray-400">
-            Position {state.currentPosition + 1}
-          </span>
+          <button
+            type="button"
+            onClick={() => setRosterOpen((o) => !o)}
+            aria-expanded={rosterOpen}
+            className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted hover:text-ink"
+          >
+            {watching} watching {rosterOpen ? "▲" : "▼"}
+          </button>
         </div>
+
+        {rosterOpen && members.length > 0 && (
+          <ul className="mt-2 space-y-1 border border-line bg-surface px-4 py-3">
+            {members.map((m) => (
+              <li key={m.id} className="text-sm text-muted">
+                {m.displayName}
+                {m.isHost && " · Host"}
+              </li>
+            ))}
+          </ul>
+        )}
 
         {/* Host-only: pending join requests */}
         {state.isHost && (state.pendingMembers?.length ?? 0) > 0 && (
-          <div className="space-y-2 rounded-xl border border-indigo-700 bg-indigo-950/40 p-3">
-            <p className="text-sm font-medium text-indigo-200">
+          <div className="mt-3 space-y-2 border border-accent bg-accent/5 p-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">
               Join request{state.pendingMembers.length > 1 ? "s" : ""}
             </p>
             <ul className="space-y-2">
               {state.pendingMembers.map((p) => (
                 <li key={p.id} className="flex items-center justify-between gap-2">
-                  <span className="truncate text-sm text-gray-200">{p.displayName}</span>
+                  <span className="truncate text-sm text-ink">{p.displayName}</span>
                   <span className="flex shrink-0 gap-2">
                     <button
                       type="button"
                       onClick={() => handleApproval(p.id, "accept")}
                       disabled={approvingId !== null}
-                      className="rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 px-3 py-1.5 text-xs font-semibold transition-colors"
+                      className="rounded-none bg-ink px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-canvas disabled:opacity-40"
                     >
                       Accept
                     </button>
@@ -288,7 +336,7 @@ export default function VotePage() {
                       type="button"
                       onClick={() => handleApproval(p.id, "reject")}
                       disabled={approvingId !== null}
-                      className="rounded-lg bg-gray-700 hover:bg-gray-600 disabled:opacity-40 px-3 py-1.5 text-xs font-semibold transition-colors"
+                      className="rounded-none border border-ink px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink disabled:opacity-40"
                     >
                       Reject
                     </button>
@@ -299,53 +347,27 @@ export default function VotePage() {
           </div>
         )}
 
-        {/* Live participant roster — collapsible to stay out of the way. */}
-        <div className="rounded-xl bg-gray-900">
-          <button
-            type="button"
-            onClick={() => setRosterOpen(o => !o)}
-            aria-expanded={rosterOpen}
-            className="flex w-full items-center justify-between px-4 py-2.5 text-sm text-gray-300 hover:text-white transition-colors"
-          >
-            <span className="font-medium">{watching} watching</span>
-            <span aria-hidden className="text-gray-500">{rosterOpen ? "▲" : "▼"}</span>
-          </button>
-          {rosterOpen && members.length > 0 && (
-            <ul className="space-y-1 px-4 pb-3">
-              {members.map(m => (
-                <li key={m.id} className="text-sm text-gray-400">
-                  {m.displayName}
-                  {m.isHost && " (Host)"}
-                </li>
-              ))}
-            </ul>
-          )}
+        <div className="mt-5">
+          <VotingCard
+            key={cardKey}
+            movie={state.currentMovie}
+            onVote={handleVote}
+            disabled={submitting || markingWatched}
+            seen={seen}
+            onToggleSeen={handleToggleSeen}
+            skipReruns={Boolean(state.watchedFilter)}
+          />
         </div>
-
-        {state.watchedFilter && (
-          <p className="text-xs text-indigo-400">Watched filter active</p>
-        )}
-
-        <VotingCard
-          key={cardKey}
-          movie={state.currentMovie}
-          onVote={handleVote}
-          disabled={submitting}
-        />
-
-        <button
-          type="button"
-          onClick={handleMarkWatched}
-          disabled={markingWatched || submitting}
-          className="w-full rounded-xl border border-gray-700 bg-transparent hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed px-4 py-2.5 text-sm font-medium text-gray-400 hover:text-gray-200 transition-colors"
-        >
-          {markingWatched ? "Marking…" : "Already seen it"}
-        </button>
-
-        {submitting && (
-          <p className="text-center text-sm text-gray-400">Submitting…</p>
-        )}
       </div>
+
+      {state.isHost && (
+        <HostFilterEditor
+          code={code}
+          open={editorOpen}
+          onClose={() => setEditorOpen(false)}
+          onApplied={handleFiltersApplied}
+        />
+      )}
     </main>
   );
 }

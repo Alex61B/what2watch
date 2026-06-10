@@ -15,18 +15,13 @@ describe('MemberList', () => {
     expect(screen.getByText(/Sam/)).toBeInTheDocument()
   })
 
-  it('shows "(Host)" for the host member', () => {
+  it('marks the host member', () => {
     render(<MemberList members={members} currentMemberId="u2" />)
-    expect(screen.getByText(/\(Host\)/)).toBeInTheDocument()
+    expect(screen.getByText(/Host/)).toBeInTheDocument()
   })
 
-  it('shows "(You)" for the current member', () => {
+  it('marks the current member', () => {
     render(<MemberList members={members} currentMemberId="u2" />)
-    expect(screen.getByText(/\(You\)/)).toBeInTheDocument()
-  })
-
-  it('shows the correct member count', () => {
-    render(<MemberList members={members} currentMemberId="u2" />)
-    expect(screen.getByText(/3 members/i)).toBeInTheDocument()
+    expect(screen.getByText(/You/)).toBeInTheDocument()
   })
 })

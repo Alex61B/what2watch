@@ -17,43 +17,24 @@ export async function GET(
     stage = 'session'
     const sessionToken = await getSessionToken(code)
     if (!sessionToken) {
-      console.warn('[poll] returning 401', { reason: 'unauthorized_no_session', roomCode })
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     stage = 'member-lookup'
     const member = await prisma.member.findUnique({ where: { sessionToken } })
-    console.log('[poll] member lookup', { roomCode, found: !!member })
     if (!member) {
-      console.warn('[poll] returning 401', { reason: 'unauthorized_no_member', roomCode })
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    console.log('[poll] request', {
-      roomCode,
-      memberId: member.id,
-      userId: member.userId,
-      timestamp: new Date().toISOString(),
-    })
-
     stage = 'room-lookup'
     const room = await prisma.room.findUnique({ where: { code } })
-    console.log('[poll] room lookup', { roomCode, found: !!room })
     if (!room) {
-      console.warn('[poll] returning 404', { reason: 'room_not_found', roomCode })
       return NextResponse.json({ error: 'Room not found' }, { status: 404 })
     }
     if (room.id !== member.roomId) {
       // The session cookie for this room code resolves to a member of a
       // different room — a stale/forged cookie. Clear it and signal clearly
       // instead of masquerading as a missing room.
-      console.warn('[poll] returning 403', {
-        reason: 'wrong_room',
-        roomCode,
-        memberId: member.id,
-        memberRoomId: member.roomId,
-        foundRoomId: room.id,
-      })
       const res = NextResponse.json(
         { error: 'This session belongs to a different room', reason: 'wrong_room' },
         { status: 403 }
@@ -70,7 +51,6 @@ export async function GET(
     const ifNoneMatch = request.headers.get('if-none-match')
     if (canShortCircuit && ifNoneMatch && ifNoneMatch.replace(/"/g, '') === String(room.queueVersion)) {
       await prisma.member.update({ where: { id: member.id }, data: { lastSeenAt: new Date() } })
-      console.log('[poll] 304', { roomId: room.id, queueVersion: room.queueVersion, memberId: member.id })
       return new NextResponse(null, {
         status: 304,
         headers: { ETag: `"${room.queueVersion}"`, 'Cache-Control': 'no-store' },
@@ -115,7 +95,7 @@ export async function GET(
         try {
           watchProviders = await getWatchProviders(room.matchedMovieId)
         } catch (provErr) {
-          console.warn('[poll] watch providers fetch failed (non-fatal)', {
+          console.error('[poll] watch providers fetch failed (non-fatal)', {
             roomId: room.id,
             matchedMovieId: room.matchedMovieId,
             message: provErr instanceof Error ? provErr.message : String(provErr),
@@ -140,17 +120,9 @@ export async function GET(
     }).then(rows => rows.map(r => r.tmdbMovieId))
 
     stage = 'current-entry'
-    const queueLength = await prisma.roomQueue.count({ where: { roomId: room.id } })
     const currentEntry = await prisma.roomQueue.findFirst({
       where: { roomId: room.id, position: room.currentPosition },
       select: { tmdbMovieId: true, watchUrl: true, streamingService: true },
-    })
-    console.log('[queue]', {
-      roomId: room.id,
-      currentPosition: room.currentPosition,
-      queueVersion: room.queueVersion,
-      queueLength,
-      op: 'poll_read',
     })
 
     stage = 'current-movie-tmdb'
@@ -172,20 +144,6 @@ export async function GET(
         }
       }
     }
-
-    // TEMP DEBUG: trace exactly what each member's poll resolves to (host vs. 2nd user).
-    console.log('[poll] response', {
-      roomCode,
-      memberId: member.id,
-      isHost: member.isHost,
-      userId: member.userId,
-      status: room.status,
-      currentPosition: room.currentPosition,
-      queueVersion: room.queueVersion,
-      currentMovieId: currentMovie?.tmdbId ?? null,
-      currentMovieTitle: (currentMovie as { title?: string } | null)?.title ?? null,
-      memberCount,
-    })
 
     return NextResponse.json(
       {

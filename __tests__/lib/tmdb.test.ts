@@ -47,6 +47,41 @@ describe('buildDiscoverUrl', () => {
   })
 })
 
+describe('buildDiscoverUrl — depth → review-count band', () => {
+  it('uses the default vote_count floor (100) and no cap when no depth is set', () => {
+    const url = buildDiscoverUrl(['netflix'], {})
+    expect(url).toContain('vote_count.gte=100')
+    expect(url).not.toContain('vote_count.lte')
+  })
+
+  it('level 1 (Crowd-Pleaser) sets a high floor with no upper cap', () => {
+    const url = buildDiscoverUrl(['netflix'], { depth: 1 })
+    expect(url).toContain('vote_count.gte=500')
+    expect(url).not.toContain('vote_count.lte')
+  })
+
+  it('level 3 (Sweet Spot) sets a bounded mid band', () => {
+    const url = buildDiscoverUrl(['netflix'], { depth: 3 })
+    expect(url).toContain('vote_count.gte=75')
+    expect(url).toContain('vote_count.lte=149')
+  })
+
+  it('level 5 (Cinephile) sets the low, obscure band', () => {
+    const url = buildDiscoverUrl(['netflix'], { depth: 5 })
+    expect(url).toContain('vote_count.gte=15')
+    expect(url).toContain('vote_count.lte=34')
+  })
+
+  it('bands tighten monotonically as depth increases', () => {
+    const floors = [1, 2, 3, 4, 5].map((depth) => {
+      const url = buildDiscoverUrl(['netflix'], { depth })
+      return Number(new URL(url).searchParams.get('vote_count.gte'))
+    })
+    const sorted = [...floors].sort((a, b) => b - a)
+    expect(floors).toEqual(sorted) // strictly descending floors
+  })
+})
+
 describe('parseMovieResult', () => {
   const raw = {
     id: 157336,

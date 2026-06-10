@@ -36,27 +36,27 @@ export default function SettingsClient({ email, initialName }: { email: string; 
   return (
     <div className="space-y-6">
       <div className="space-y-1">
-        <label className="text-sm text-gray-400">Email</label>
-        <p className="text-gray-200">{email}</p>
+        <label className="text-sm text-muted">Email</label>
+        <p className="text-ink">{email}</p>
       </div>
       <div className="space-y-2">
-        <label className="text-sm text-gray-400">Display name</label>
+        <label className="text-sm text-muted">Display name</label>
         <input
           type="text"
           value={displayName}
           onChange={e => setDisplayName(e.target.value)}
-          className="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="w-full rounded-lg bg-surface-soft border border-line px-4 py-2.5 text-ink focus:outline-none focus:ring-2 focus:ring-indigo-500"
         />
       </div>
       <div className="space-y-2">
-        <label className="text-sm text-gray-400">Default streaming services</label>
+        <label className="text-sm text-muted">Default streaming services</label>
         <StreamingServicePicker selected={services} onChange={setServices} />
       </div>
       <button
         type="button"
         onClick={handleSave}
         disabled={saving}
-        className="rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 px-5 py-2.5 font-semibold transition-colors"
+        className="rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 px-5 py-2.5 font-semibold text-white transition-colors"
       >
         {saving ? 'Saving…' : 'Save'}
       </button>

@@ -2,6 +2,9 @@
 import { useSession, signOut } from 'next-auth/react'
 import Link from 'next/link'
 
+const CHIP =
+  'inline-flex items-center border border-ink px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-ink transition-colors hover:bg-ink hover:text-canvas'
+
 export default function AuthStatus() {
   const { data: session, status } = useSession()
 
@@ -9,12 +12,13 @@ export default function AuthStatus() {
 
   if (session?.user) {
     return (
-      <div className="flex items-center gap-3 text-sm">
-        <Link href="/profile" className="text-gray-300 hover:text-white transition-colors">Profile</Link>
-        <span className="text-gray-400">{session.user.name ?? session.user.email}</span>
+      <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em]">
+        <Link href="/profile" className={CHIP}>
+          Profile
+        </Link>
         <button
           onClick={() => signOut({ callbackUrl: '/' })}
-          className="text-gray-500 hover:text-gray-300 transition-colors"
+          className="font-semibold text-faint transition-colors hover:text-ink"
         >
           Sign out
         </button>
@@ -23,11 +27,8 @@ export default function AuthStatus() {
   }
 
   return (
-    <Link
-      href="/auth/signin"
-      className="text-sm text-gray-400 hover:text-gray-200 transition-colors"
-    >
-      Sign in
+    <Link href="/auth/signin" className={CHIP}>
+      ⇥ Sign in
     </Link>
   )
 }

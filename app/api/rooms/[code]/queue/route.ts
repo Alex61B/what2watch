@@ -17,36 +17,18 @@ export async function GET(
     stage = 'session'
     const sessionToken = await getSessionToken(code)
     if (!sessionToken) {
-      console.warn('[queue-route] returning 401', { reason: 'unauthorized_no_session', roomCode })
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     stage = 'member-lookup'
     const member = await prisma.member.findUnique({ where: { sessionToken } })
-    console.log('[queue-route] member lookup', { roomCode, found: !!member })
     if (!member) {
-      console.warn('[queue-route] returning 401', { reason: 'unauthorized_no_member', roomCode })
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    console.log('[queue-route] request', {
-      roomCode,
-      memberId: member.id,
-      userId: member.userId,
-      timestamp: new Date().toISOString(),
-    })
-
     stage = 'room-lookup'
     const room = await prisma.room.findUnique({ where: { code } })
-    console.log('[queue-route] room lookup', { roomCode, found: !!room })
     if (!room || room.id !== member.roomId) {
-      console.warn('[queue-route] returning 404', {
-        reason: 'room_not_found',
-        roomCode,
-        memberId: member.id,
-        memberRoomId: member.roomId,
-        foundRoomId: room?.id ?? null,
-      })
       return NextResponse.json({ error: 'Room not found' }, { status: 404 })
     }
 
@@ -83,14 +65,6 @@ export async function GET(
     }
 
     const excludedIds = [...new Set([...votedIds, ...rejectedIds, ...watchedIds])]
-    console.log('[queue-route] excluded', {
-      roomId: room.id,
-      memberId: member.id,
-      votedCount: votedIds.length,
-      rejectedCount: rejectedIds.length,
-      watchedCount: watchedIds.length,
-      totalExcluded: excludedIds.length,
-    })
     const notInClause = excludedIds.length ? excludedIds : ['__none__']
 
     stage = 'member-queue-find'
@@ -100,12 +74,6 @@ export async function GET(
     })
 
     if (!memberQueueEntry) {
-      console.warn('[queue-route] returning 200 null', {
-        reason: 'no_eligible_movie_in_member_queue',
-        roomId: room.id,
-        memberId: member.id,
-        excludedCount: excludedIds.length,
-      })
       return NextResponse.json(null)
     }
 
@@ -115,12 +83,6 @@ export async function GET(
     })
 
     if (!nextEntry) {
-      console.warn('[queue-route] returning 200 null', {
-        reason: 'member_queue_entry_missing_from_room_queue',
-        roomId: room.id,
-        memberId: member.id,
-        tmdbMovieId: memberQueueEntry.tmdbMovieId,
-      })
       return NextResponse.json(null)
     }
 
@@ -141,13 +103,6 @@ export async function GET(
       })
       return NextResponse.json(null)
     }
-
-    console.log('[queue-route] success', {
-      roomId: room.id,
-      memberId: member.id,
-      tmdbMovieId: nextEntry.tmdbMovieId,
-      remaining,
-    })
 
     return NextResponse.json({
       movie: { ...movie, watchUrl: nextEntry.watchUrl, streamingService: nextEntry.streamingService },

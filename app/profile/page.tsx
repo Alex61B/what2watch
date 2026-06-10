@@ -14,7 +14,7 @@ export default async function ProfilePage() {
   ]
 
   return (
-    <main className="min-h-screen bg-gray-950 text-white px-4 py-12">
+    <main className="min-h-screen bg-canvas text-ink px-4 py-12">
       <div className="w-full max-w-md mx-auto space-y-6">
         <ProfileHeader title="Your Profile" />
         <nav className="space-y-3">
@@ -22,7 +22,7 @@ export default async function ProfilePage() {
             <Link
               key={l.href}
               href={l.href}
-              className="block rounded-xl bg-gray-900 hover:bg-gray-800 px-5 py-4 font-medium transition-colors"
+              className="block rounded-xl bg-surface hover:bg-surface-soft px-5 py-4 font-medium transition-colors"
             >
               {l.label}
             </Link>

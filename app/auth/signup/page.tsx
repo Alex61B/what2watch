@@ -62,19 +62,19 @@ export default function SignUpPage() {
   }
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center bg-gray-950 text-white px-4 py-12">
+    <main className="min-h-screen flex flex-col items-center justify-center bg-canvas text-ink px-4 py-12">
       <div className="w-full max-w-md space-y-8">
         {/* Header */}
         <div className="text-center space-y-2">
           <h1 className="text-3xl font-bold tracking-tight">Create account</h1>
-          <p className="text-gray-400">Join What2Watch</p>
+          <p className="text-muted">Join What2Watch</p>
         </div>
 
         {/* Form card */}
-        <section className="bg-gray-900 rounded-2xl p-6 space-y-4">
+        <section className="bg-surface rounded-2xl p-6 space-y-4">
           <form onSubmit={handleSignUp} className="space-y-3">
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-300 mb-1">
+              <label htmlFor="email" className="block text-sm font-medium text-ink mb-1">
                 Email
               </label>
               <input
@@ -86,12 +86,12 @@ export default function SignUpPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={loading}
                 required
-                className="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                className="w-full rounded-lg bg-surface-soft border border-line px-4 py-2.5 text-ink placeholder-faint focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
               />
             </div>
 
             <div>
-              <label htmlFor="displayName" className="block text-sm font-medium text-gray-300 mb-1">
+              <label htmlFor="displayName" className="block text-sm font-medium text-ink mb-1">
                 Display name
               </label>
               <input
@@ -103,12 +103,12 @@ export default function SignUpPage() {
                 onChange={(e) => setDisplayName(e.target.value)}
                 disabled={loading}
                 required
-                className="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                className="w-full rounded-lg bg-surface-soft border border-line px-4 py-2.5 text-ink placeholder-faint focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
               />
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-1">
+              <label htmlFor="password" className="block text-sm font-medium text-ink mb-1">
                 Password
               </label>
               <input
@@ -121,7 +121,7 @@ export default function SignUpPage() {
                 disabled={loading}
                 required
                 minLength={8}
-                className="w-full rounded-lg bg-gray-800 border border-gray-700 px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                className="w-full rounded-lg bg-surface-soft border border-line px-4 py-2.5 text-ink placeholder-faint focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
               />
             </div>
 
@@ -130,7 +130,7 @@ export default function SignUpPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3.5 font-semibold transition-colors"
+              className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed px-6 py-3.5 font-semibold transition-colors text-white"
             >
               {loading ? 'Creating account...' : 'Create account'}
             </button>
@@ -138,7 +138,7 @@ export default function SignUpPage() {
         </section>
 
         {/* Footer links */}
-        <div className="text-center space-y-2 text-sm text-gray-400">
+        <div className="text-center space-y-2 text-sm text-muted">
           <p>
             Already have an account?{' '}
             <Link href="/auth/signin" className="text-indigo-400 hover:text-indigo-300">
@@ -146,7 +146,7 @@ export default function SignUpPage() {
             </Link>
           </p>
           <p>
-            <Link href="/" className="text-gray-500 hover:text-gray-300 transition-colors">
+            <Link href="/" className="text-faint hover:text-ink transition-colors">
               Continue as guest
             </Link>
           </p>

@@ -42,34 +42,34 @@ export default function MovieListClient({ type }: { type: 'watchlist' | 'seen' }
   }, [type])
 
   if (movies === null) {
-    return <p className="text-gray-400">Loading…</p>
+    return <p className="text-muted">Loading…</p>
   }
 
   if (movies.length === 0) {
-    return <p className="text-gray-400">Nothing here yet.</p>
+    return <p className="text-muted">Nothing here yet.</p>
   }
 
   return (
     <ul className="grid grid-cols-2 sm:grid-cols-3 gap-4">
       {movies.map(m => (
-        <li key={m.tmdbMovieId} className="bg-gray-900 rounded-xl overflow-hidden flex flex-col">
+        <li key={m.tmdbMovieId} className="bg-surface rounded-xl overflow-hidden flex flex-col">
           {m.posterUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={m.posterUrl} alt={m.title} className="w-full aspect-[2/3] object-cover" />
           ) : (
-            <div className="w-full aspect-[2/3] bg-gray-800 flex items-center justify-center text-gray-600 text-xs px-2 text-center">
+            <div className="w-full aspect-[2/3] bg-surface-soft flex items-center justify-center text-muted text-xs px-2 text-center">
               No image
             </div>
           )}
           <div className="p-3 flex flex-col gap-2 flex-1">
-            <p className="text-sm font-medium text-gray-100 line-clamp-2">{m.title}</p>
-            {m.year > 0 && <p className="text-xs text-gray-500">{m.year}</p>}
+            <p className="text-sm font-medium text-ink line-clamp-2">{m.title}</p>
+            {m.year > 0 && <p className="text-xs text-faint">{m.year}</p>}
             <button
               type="button"
               onClick={() => handleRemove(m.tmdbMovieId)}
               disabled={removing === m.tmdbMovieId}
               aria-label={`Remove ${m.title}`}
-              className="mt-auto rounded-lg border border-gray-700 hover:bg-gray-800 disabled:opacity-40 px-3 py-1.5 text-xs text-gray-300 transition-colors"
+              className="mt-auto rounded-lg border border-line hover:bg-surface-soft disabled:opacity-40 px-3 py-1.5 text-xs text-ink transition-colors"
             >
               {removing === m.tmdbMovieId ? 'Removing…' : 'Remove'}
             </button>

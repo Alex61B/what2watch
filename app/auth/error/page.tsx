@@ -21,13 +21,13 @@ function AuthErrorContent() {
   const message = ERROR_MESSAGES[error] ?? ERROR_MESSAGES.Default
 
   return (
-    <main className="min-h-screen flex flex-col items-center justify-center bg-gray-950 text-white px-4 py-12">
+    <main className="min-h-screen flex flex-col items-center justify-center bg-canvas text-ink px-4 py-12">
       <div className="w-full max-w-md space-y-6 text-center">
         <h1 className="text-3xl font-bold tracking-tight">Sign-in error</h1>
-        <p className="text-gray-400">{message}</p>
+        <p className="text-muted">{message}</p>
         <Link
           href="/auth/signin"
-          className="inline-block rounded-xl bg-indigo-600 hover:bg-indigo-500 px-6 py-3 font-semibold transition-colors"
+          className="inline-block rounded-xl bg-indigo-600 hover:bg-indigo-500 px-6 py-3 font-semibold transition-colors text-white"
         >
           Back to sign in
         </Link>

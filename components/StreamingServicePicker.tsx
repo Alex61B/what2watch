@@ -1,12 +1,13 @@
 import { STREAMING_SERVICES, ServiceId } from '@/lib/tmdb'
 
-const SERVICE_COLORS: Record<ServiceId, string> = {
-  netflix: 'bg-red-600 text-white border-red-600',
-  prime:   'bg-blue-600 text-white border-blue-600',
-  disney:  'bg-indigo-700 text-white border-indigo-700',
-  hbo:     'bg-purple-700 text-white border-purple-700',
-  hulu:    'bg-green-600 text-white border-green-600',
-  apple:   'bg-gray-600 text-white border-gray-600',
+// Brand dots so each service stays recognizable whether selected or not.
+const SERVICE_DOTS: Record<ServiceId, string> = {
+  netflix: 'bg-red-600',
+  prime: 'bg-sky-500',
+  disney: 'bg-indigo-600',
+  hbo: 'bg-purple-600',
+  hulu: 'bg-green-500',
+  apple: 'bg-zinc-400',
 }
 
 interface StreamingServicePickerProps {
@@ -27,7 +28,7 @@ export default function StreamingServicePicker({
   }
 
   return (
-    <div className="grid grid-cols-3 gap-3">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
       {STREAMING_SERVICES.map((service) => {
         const isSelected = selected.includes(service.id)
         return (
@@ -37,13 +38,14 @@ export default function StreamingServicePicker({
             aria-pressed={isSelected}
             onClick={() => handleToggle(service.id)}
             className={[
-              'rounded-lg border-2 px-4 py-3 text-sm font-medium transition-colors',
+              'flex items-center gap-2 rounded-none border px-3 py-2.5 text-sm font-medium transition-colors',
               isSelected
-                ? SERVICE_COLORS[service.id]
-                : 'border-gray-300 bg-white text-gray-500 hover:border-gray-400 hover:text-gray-700',
+                ? 'border-ink bg-ink text-canvas'
+                : 'border-line bg-surface text-muted hover:border-ink hover:text-ink',
             ].join(' ')}
           >
-            {service.name}
+            <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${SERVICE_DOTS[service.id]}`} />
+            <span className="truncate">{service.name}</span>
           </button>
         )
       })}
