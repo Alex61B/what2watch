@@ -7,6 +7,7 @@ import VotingCard from "@/components/VotingCard";
 import DrainedScreen from "@/components/DrainedScreen";
 import RoomCodeBar from "@/components/RoomCodeBar";
 import HostFilterEditor from "@/components/HostFilterEditor";
+import JoinRequestModal from "@/components/JoinRequestModal";
 
 interface Movie {
   tmdbId: string;
@@ -313,40 +314,6 @@ export default function VotePage() {
           </ul>
         )}
 
-        {/* Host-only: pending join requests */}
-        {state.isHost && (state.pendingMembers?.length ?? 0) > 0 && (
-          <div className="mt-3 space-y-2 border border-accent bg-accent/5 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-accent">
-              Join request{state.pendingMembers.length > 1 ? "s" : ""}
-            </p>
-            <ul className="space-y-2">
-              {state.pendingMembers.map((p) => (
-                <li key={p.id} className="flex items-center justify-between gap-2">
-                  <span className="truncate text-sm text-ink">{p.displayName}</span>
-                  <span className="flex shrink-0 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleApproval(p.id, "accept")}
-                      disabled={approvingId !== null}
-                      className="rounded-none bg-ink px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-canvas disabled:opacity-40"
-                    >
-                      Accept
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleApproval(p.id, "reject")}
-                      disabled={approvingId !== null}
-                      className="rounded-none border border-ink px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink disabled:opacity-40"
-                    >
-                      Reject
-                    </button>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
         <div className="mt-5">
           <VotingCard
             key={cardKey}
@@ -366,6 +333,14 @@ export default function VotePage() {
           open={editorOpen}
           onClose={() => setEditorOpen(false)}
           onApplied={handleFiltersApplied}
+        />
+      )}
+
+      {state.isHost && (
+        <JoinRequestModal
+          pendingMembers={state.pendingMembers ?? []}
+          onApprove={handleApproval}
+          approvingId={approvingId}
         />
       )}
     </main>

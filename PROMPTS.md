@@ -2,6 +2,25 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-10 — Last-used name default, host approval popup, depth-band reshuffle
+
+**Prompt (summary):** (1) Default the name field to the user's last-used name, falling back to their
+full account name. (2) When someone joins after the room has started, give the host a popup to
+approve or deny them (not just the joiner's "waiting" screen). (3) Shift the 5 depth levels more
+mainstream — L3 was too niche. (User picked the "moderate shift" distribution.)
+
+**Approach:** (1) `GET /api/user/preferences` now returns `defaultName` = most recent
+`Member.displayName` for the user (by `joinedAt`) `?? user.displayName`; the home + lobby prefill
+effects read `defaultName`. (2) New `components/JoinRequestModal.tsx` — host-only popup that
+auto-opens on pending join requests with per-person Accept/Deny (reusing `handleApproval` +
+`POST /approvals`); "Not now" collapses it to a re-open pill, and a brand-new request re-opens it.
+The vote page renders it for hosts and drops the old inline pending box. (3) `DEPTH_BANDS` raised to
+L1 ≥3000 · L2 1000–2999 · L3 350–999 · L4 120–349 · L5 40–119 (labels/blurbs and `DEFAULT_MIN_VOTES`
+unchanged; `FilterControls` shows only labels so no UI change).
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 184 Jest tests pass (new
+`JoinRequestModal` suite + updated depth-band assertions).
+
 ## 2026-06-10 — Streaming-service links, prefilled name, second-user "loading movies…" hang
 
 **Prompt (summary):** (1) Make the "watch" links redirect to the actual streaming service (e.g.

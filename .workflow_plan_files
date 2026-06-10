@@ -1,7 +1,8 @@
-lib/tmdb.ts
-components/MatchResult.tsx
 app/api/user/preferences/route.ts
 app/page.tsx
 app/room/[code]/lobby/page.tsx
+components/JoinRequestModal.tsx
+app/room/[code]/vote/page.tsx
+__tests__/components/JoinRequestModal.test.tsx
+lib/tmdb.ts
 __tests__/lib/tmdb.test.ts
-__tests__/components/MatchResult.test.tsx

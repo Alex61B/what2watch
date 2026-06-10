@@ -1,94 +1,86 @@
-# Research — Streaming links, prefilled name, second-user "loading movies…" hang
+# Research — Last-used name default, host approval popup, depth-band reshuffle
 
-Three independent requests in one cycle:
+Three follow-up requests, all building on the previous cycle:
 
-1. **Streaming redirect** — the "Watch on …" button on the match screen should open the actual streaming service (Netflix, etc.), not the TMDB website.
-2. **Prefilled name** — when the user is signed in, pre-populate the name field on the home and lobby join forms (still editable).
-3. **Bug: second user stuck on "Loading movies…"** — after the host starts a room, opening the shared link as a new user hangs forever on the vote screen's spinner.
+1. **Name default = last-used name, else full user name.** Prefill the join/create name with the most recent name the user joined a room under; if they've never joined one, use their complete account name. Still editable.
+2. **Host approval popup.** When someone joins after the room has started, the joiner sees "Waiting for the host…". Give the **host** a prominent popup to approve or deny that person (today it's only a small inline box on the vote screen).
+3. **Depth-band reshuffle (moderate shift, user-approved).** Level 3 (the default) is too niche. Raise every level's TMDB review-count floor so the default lands on recognizable films.
 
 ---
 
 ## 1. Requirements Summary
 
-### R1 — Streaming service redirect
-The match-result page (`components/MatchResult.tsx`) renders a "● Watch on {service}" CTA. Today its `href` is a TMDB URL:
+### R1 — Last-used name default
+- "Last used name" = the most recent `Member.displayName` for this signed-in user (`Member.userId == session.user.id`, latest `joinedAt`).
+- "Complete name of the user" = `User.displayName` (set from Google `name` / signup name — `auth.ts:13-19`, `signup/route.ts:33`).
+- Resolution: `lastUsedName ?? user.displayName`. Applies to both name inputs prefilled last cycle: home (`app/page.tsx`) and lobby (`app/room/[code]/lobby/page.tsx`).
 
-```
-const watchLink = movie.watchProviders?.link ?? movie.watchUrl ?? null   // MatchResult.tsx:61
-```
+### R2 — Host approval popup
+- A mid-session joiner is created `approved:false` (`members/route.ts:45`) and sees the "Waiting for the host…" screen (`vote/page.tsx:254`).
+- The host currently sees a small **inline box** on the vote page (`vote/page.tsx:316-348`) listing pending members with Accept/Reject, calling `POST /api/rooms/[code]/approvals` via `handleApproval` (`vote/page.tsx:206-222`).
+- Want: a **modal popup** that surfaces automatically when a request arrives, with Accept/Deny per person. Replace the inline box with the modal; never lose access to pending requests.
 
-- `watchProviders.link` → TMDB/JustWatch redirect `https://www.themoviedb.org/movie/{id}/watch?locale=US`
-- `watchUrl` → `https://www.themoviedb.org/movie/{id}` (stored at queue build: `start/route.ts:90`, `requeue/route.ts:119`)
+### R3 — Depth bands (moderate shift)
+`DEPTH_BANDS` in `lib/tmdb.ts:60-66` maps the 1–5 dial to `vote_count` bands. User-approved new values:
 
-Both land on TMDB. The user wants the button to open the real service (e.g. `netflix.com`). TMDB does **not** expose stable per-title deep links to Netflix/Prime/etc., so the realistic best-effort is a **title-search deep link into the matched service** (e.g. `https://www.netflix.com/search?q=Parasite`).
-
-### R2 — Prefilled name when signed in
-Two name inputs, both editable:
-- Home page `app/page.tsx:28` — shared `name` state for create + join (input at :167).
-- Lobby page `app/room/[code]/lobby/page.tsx:42` — `joinName` (input at :192).
-
-When signed in, the field should arrive populated with the user's display name; the user can overwrite it.
-
-### R3 — Second user hang (the bug)
-A new user who opens the shared link (`/room/{code}/lobby`) after the room is in `VOTING` is immediately redirected to `/room/{code}/vote` **before joining**, never gets a session cookie, and the vote page's poll 401s forever → "Loading movies…" never clears.
+| Level | Label | Now | New |
+|---|---|---|---|
+| 1 | Crowd-Pleaser | ≥500 | **≥3000** |
+| 2 | Easy Watch | 150–499 | **1000–2999** |
+| 3 | Sweet Spot (default) | 75–149 | **350–999** |
+| 4 | Deep Cut | 35–74 | **120–349** |
+| 5 | Certified Cinephile | 15–34 | **40–119** |
 
 ---
 
 ## 2. Stack Choices (existing patterns to leverage)
 
-- **Streaming map:** `lib/tmdb.ts` already owns `STREAMING_SERVICES` (id → name → tmdbId) and is already imported by `MatchResult.tsx`. Add a pure `buildStreamingUrl()` helper there; no new file or dependency.
-- **Name source:** `app/api/user/preferences` already runs `auth()` and reads the `User` row, and its `PUT` already accepts `displayName`. Extend its `GET` to also return `displayName` (authoritative, reflects profile/settings). This avoids touching the restricted `auth.ts` and works for both pages without wiring `useSession()` into the lobby (a 401 from the endpoint simply means "anonymous → don't prefill").
-- **Redirect gating:** the existing GET `/api/rooms/[code]` already returns `currentMemberId` (null for non-members). Use it to gate the lobby redirect. No API change needed for the bug fix.
-- **Tests:** Jest + Testing Library already cover `MatchResult` and `lib/tmdb`. Update/extend those.
+- **R1:** extend the existing `GET /api/user/preferences` (already runs `auth()` + reads the `User` row) to also query the latest `Member` for the user and return a resolved `defaultName`. The client effects added last cycle just read `defaultName` instead of `displayName`. `Member` already has `userId`, `displayName`, `joinedAt` (`prisma/schema.prisma`).
+- **R2:** mirror the existing modal pattern in `components/HostFilterEditor.tsx` (`fixed inset-0 z-50 … bg-ink/40` overlay) in a new `components/JoinRequestModal.tsx`. Reuse the vote page's `handleApproval` + `approvingId`. Encapsulate auto-open / dismiss / re-open-on-new-request inside the component so the vote page change is minimal.
+- **R3:** pure data change to `DEPTH_BANDS` (+ comment). `FilterControls` shows only labels/blurbs (`DEPTH_LEVELS`), no band numbers — no UI change. The dial default stays level 3.
 
 ---
 
 ## 3. Environment Verification
 
-- `TMDB_API_KEY` is read in `lib/tmdb.ts:88` (already working — discover/match flows function for the host today). No new env needed.
-- No new packages, no schema/migration changes. `RoomQueue.streamingService` and `watchUrl` already exist and stay as-is.
-- Auth unchanged: `session.strategy = 'jwt'`; `User.displayName` already populated on signup (`auth.ts:13-19`, credentials `authorize` returns `name: user.displayName` at :50).
-- `.env.local` is open in the IDE but **must not be edited** (restricted) — no change required for any of these tasks.
+- No new env, no packages. No schema/migration changes (`Member.userId`/`joinedAt`, `User.displayName` already exist).
+- `DEFAULT_MIN_VOTES` (100) — the no-depth fallback floor — is **unchanged**; the request is about the 5 dial levels only, and the dial always defaults to 3, so a band is normally in effect.
 
 ---
 
 ## 4. Risks & Edge Cases
 
-- **R1 provider-name variance:** TMDB provider names vary ("Amazon Prime Video", "Disney Plus", "Apple TV Plus", "HBO Max"/"Max"). The helper must match by keyword/substring (lowercased) and also accept the internal `STREAMING_SERVICES` id as a fallback. `RoomQueue.streamingService` is only `serviceIds[0]` (`start/route.ts:89`), i.e. the *first selected* service, not necessarily where the title actually streams — so prefer the live `watchProviders.providers[0].name`, fall back to the stored id, then to the TMDB link if nothing maps.
-- **R1 unmatched service:** if no provider maps (unknown service / no providers returned), fall back to the existing TMDB link / "Check {service} for availability" so the CTA never breaks.
-- **R1 existing tests:** `__tests__/components/MatchResult.test.tsx:54-76` assert the TMDB href. They must be updated to assert the new service URL (otherwise verify.sh fails).
-- **R2 clobbering input:** prefill must not overwrite text the user already typed — only set when the field is still empty. Guard with a one-shot effect / empty-check.
-- **R2 anonymous users:** `GET /api/user/preferences` 401s when signed out — swallow and leave the field empty.
-- **R3 mid-session join is pending-approval:** joining while `VOTING` creates an unapproved member (`members/route.ts:45`). After the fix the joiner should be routed to `/vote`, which already renders the "Waiting for the host…" screen (`vote/page.tsx:254`) and the host already sees the approval prompt (`vote/page.tsx:317`). So the fix must **redirect after a successful join**, not only suppress the premature redirect.
-- **R3 polling path is already safe:** the lobby's 3s poll calls `/poll`, which 401s for non-members and returns early (`lobby:88`), so it never redirects a non-member. The *only* offending redirect is in the initial `loadRoom` (`lobby:73`), which uses `/api/rooms/[code]` (no auth) and fires regardless of membership.
-- **Client-component testing:** the lobby fix lives in a client component; jsdom lacks `fetch`/`Response`, so a full lobby render test is heavy. Lean on manual verification for the redirect flow; keep automated coverage on the pure/route-level pieces.
+- **R1 latest-member query:** must scope to `userId == session.user.id` and order by `joinedAt desc`. A user who never joined a room → no member → fall back to `user.displayName`. `displayName` is always non-empty (validated at create), so no empty-name prefill.
+- **R1 contract:** add a new `defaultName` field rather than overloading `displayName`, so the meaning stays clear. Nothing else consumes `displayName` from this endpoint (setup page reads only `savedServices`/`savedFilters`).
+- **R1 no-clobber:** keep last cycle's one-shot guard (only set when the field is still empty).
+- **R2 losing access if dismissed:** a dismissible modal must not strand pending requests. Mitigation: while dismissed with requests outstanding, show a compact "N waiting to join — review" re-open pill; a newly-arrived pending id auto-reopens the modal (track previous ids in a ref).
+- **R2 stale list after action:** after Accept/Deny, the member leaves `pendingMembers` on the next poll; the modal closes when the list empties. `handleApproval` already calls `pollOnce()`.
+- **R2 host-only:** the modal renders only when `state.isHost` (the poll already returns `pendingMembers` only meaningfully for the host UI; non-hosts never render it).
+- **R3 sparse results:** higher floors intersected with strict genre/rating filters can thin out results. The existing back-fill in `discoverMovies` (`lib/tmdb.ts:182-196`) already removes the band when banded results are sparse, so no 422 regression. Floors remain strictly descending (3000 > 1000 > 350 > 120 > 40) — the monotonic-bands test still holds.
+- **Existing tests:** `__tests__/lib/tmdb.test.ts` asserts the old band numbers (levels 1/3/5) — must be updated. The `vote_count.gte=100` no-depth test is unchanged.
 
 ---
 
 ## 5. Assumptions & Open Questions
 
-- **Assumption (R1):** A title-search URL into the service is acceptable as "redirect to Netflix" (no public per-title deep-link API exists). Region is US (matches `watch_region: 'US'` in `buildDiscoverUrl`).
-- **Assumption (R2):** The authoritative name to prefill is `User.displayName` (what the user manages in profile settings), not the per-room display name.
-- **Assumption (R3):** A new user opening a `VOTING` room link *should* be allowed to join (mid-session join with host approval is an intended, already-built feature). The fix surfaces the existing join form rather than blocking.
-- **Resolved:** `session.user.name` may or may not be reliably populated across providers; sidestepped by reading `displayName` from the DB via the preferences endpoint.
+- **Assumption (R1):** "last used" is account-scoped (DB member history), consistent with last cycle's signed-in prefill — not a per-device localStorage value.
+- **Assumption (R2):** replacing the inline box with the modal (plus a re-open pill) is acceptable; the modal requires an explicit Accept/Deny per person but can be deferred via the pill.
+- **Resolved (R3):** distribution confirmed by the user as the "moderate shift" option.
 
 ---
 
 ## 6. Out of Scope
 
-- No changes to `auth.ts`, `app/api/auth/*`, session strategy, or any `.env*` file.
-- No Prisma schema or migration changes; `RoomQueue.watchUrl`/`streamingService` columns are kept.
-- No real per-title streaming deep links via a third-party availability API (only search-deep-links).
-- No redesign of the lobby/vote/match UI beyond the targeted fixes.
-- No change to `requeue`/`start` URL persistence (the link is computed at render time from provider data).
+- No `auth.ts` / `app/api/auth/*` / `.env*` changes.
+- No Prisma schema or migration changes.
+- No change to depth **labels/blurbs** (`DEPTH_LEVELS`) or `DEFAULT_MIN_VOTES`.
+- No change to the joiner-side "Waiting for the host…" screen (only the host gets the new popup).
+- No new approval API; reuse `POST /api/rooms/[code]/approvals`.
 
 ---
 
 ## 7. Readiness Verdict: READY FOR PLANNING
 
-Root causes confirmed by reading source:
-- R1 → `MatchResult.tsx:61` (+ `lib/tmdb.ts` for the helper).
-- R2 → `app/page.tsx`, `app/room/[code]/lobby/page.tsx`, `app/api/user/preferences/route.ts`.
-- R3 → `app/room/[code]/lobby/page.tsx:73` (premature redirect before join) + add post-join redirect.
-
-Anticipated files to touch (finalized in PLAN): `lib/tmdb.ts`, `components/MatchResult.tsx`, `app/api/user/preferences/route.ts`, `app/page.tsx`, `app/room/[code]/lobby/page.tsx`, `__tests__/components/MatchResult.test.tsx`, `__tests__/lib/tmdb.test.ts`.
+- R1 → `app/api/user/preferences/route.ts` (+ `defaultName`), `app/page.tsx`, `app/room/[code]/lobby/page.tsx`.
+- R2 → new `components/JoinRequestModal.tsx`, `app/room/[code]/vote/page.tsx`, new `__tests__/components/JoinRequestModal.test.tsx`.
+- R3 → `lib/tmdb.ts` (`DEPTH_BANDS`), `__tests__/lib/tmdb.test.ts`.

@@ -37,8 +37,10 @@ export default function LandingPage() {
         const res = await fetch("/api/user/preferences");
         if (!res.ok) return;
         const data = await res.json();
-        if (cancelled || typeof data.displayName !== "string" || !data.displayName) return;
-        setName((prev) => (prev ? prev : data.displayName));
+        // Prefer the last name they joined a room under; the route already falls
+        // back to their full account name.
+        if (cancelled || typeof data.defaultName !== "string" || !data.defaultName) return;
+        setName((prev) => (prev ? prev : data.defaultName));
       } catch {
         // best-effort prefill
       }

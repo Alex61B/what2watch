@@ -51,18 +51,18 @@ export interface DiscoverFilters {
 }
 
 /**
- * The depth dial mapped to review-count (`vote_count`) bands. Derived from the
- * measured distribution of the streamable US catalog (see docs/research.md):
- * equal-population fifths, so each level is a meaningful, well-populated
- * popularity tier. Low depth = mainstream (heavily reviewed); high depth =
- * obscure (lightly reviewed). Level 1 has no upper cap.
+ * The depth dial mapped to review-count (`vote_count`) bands. Low depth =
+ * mainstream (heavily reviewed); high depth = obscure (lightly reviewed). Tuned
+ * so the default (level 3) lands on solidly recognizable films rather than niche
+ * ones, with each level a step more obscure than the one above it. Level 1 has
+ * no upper cap. Floors stay strictly descending across levels.
  */
 export const DEPTH_BANDS: Record<number, { gte: number; lte?: number }> = {
-  1: { gte: 500 },            // Crowd-Pleaser
-  2: { gte: 150, lte: 499 },  // Easy Watch
-  3: { gte: 75, lte: 149 },   // The Sweet Spot (default)
-  4: { gte: 35, lte: 74 },    // Deep Cut
-  5: { gte: 15, lte: 34 },    // Certified Cinephile
+  1: { gte: 3000 },             // Crowd-Pleaser
+  2: { gte: 1000, lte: 2999 },  // Easy Watch
+  3: { gte: 350, lte: 999 },    // The Sweet Spot (default)
+  4: { gte: 120, lte: 349 },    // Deep Cut
+  5: { gte: 40, lte: 119 },     // Certified Cinephile
 }
 
 /** Default vote_count floor when no depth is selected (the app's prior behaviour). */

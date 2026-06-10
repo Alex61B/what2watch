@@ -1,93 +1,91 @@
-# Plan — Streaming links, prefilled name, second-user hang
+# Plan — Last-used name default, host approval popup, depth-band reshuffle
 
-Derived from `docs/research.md`. Three independent changes; each lists the edit, the contract, and an acceptance criterion. Every file below is in `.workflow_plan_files`.
+Derived from `docs/research.md`. Every file below is in `.workflow_plan_files`.
 
 ---
 
-## Task 1 — "Watch on …" opens the real streaming service
+## Task 1 — Default name = last-used name, else full user name
 
-### 1a. `lib/tmdb.ts` — add a pure URL builder
-Add an exported helper plus an internal provider→search-URL map:
-
-```ts
-export function buildStreamingUrl(opts: {
-  providerName?: string | null   // live TMDB provider name, e.g. "Amazon Prime Video"
-  serviceId?: string | null      // internal STREAMING_SERVICES id, e.g. "prime"
-  title: string
-}): string | null
-```
-
-- Resolve a `serviceId` from `providerName` (lowercased keyword match: `netflix`, `prime|amazon`, `disney`, `hbo|max`, `hulu`, `apple`) → fall back to the passed `serviceId`.
-- Map the resolved id to a title-search deep link (US region), title URL-encoded:
-  - `netflix` → `https://www.netflix.com/search?q={t}`
-  - `prime` → `https://www.primevideo.com/search?phrase={t}`
-  - `disney` → `https://www.disneyplus.com/search?q={t}`
-  - `hbo` → `https://play.max.com/search?q={t}`
-  - `hulu` → `https://www.hulu.com/search?q={t}`
-  - `apple` → `https://tv.apple.com/search?term={t}`
-- Return `null` when nothing maps (caller falls back to the TMDB link).
-- Pure function (no fetch/env) so it is safe to import in the (server) `MatchResult` component and unit-test directly.
-
-### 1b. `components/MatchResult.tsx` — prefer the real service link
-Change the `watchLink` derivation (currently line 61):
+### 1a. `app/api/user/preferences/route.ts` (GET)
+After loading the user, query their most recent member row and return a resolved default:
 
 ```ts
-const serviceUrl = buildStreamingUrl({
-  providerName: movie.watchProviders?.providers?.[0]?.name,
-  serviceId: movie.streamingService,
-  title: movie.title,
+const lastMember = await prisma.member.findFirst({
+  where: { userId: session.user.id },
+  orderBy: { joinedAt: 'desc' },
+  select: { displayName: true },
 })
-const watchLink = serviceUrl ?? movie.watchProviders?.link ?? movie.watchUrl ?? null
+return NextResponse.json({
+  displayName: user.displayName,
+  defaultName: lastMember?.displayName ?? user.displayName,
+  savedServices: user.savedServices,
+  savedFilters: user.savedFilters,
+})
 ```
 
-`serviceName` logic is unchanged. CTA markup unchanged.
+### 1b. `app/page.tsx` & 1c. `app/room/[code]/lobby/page.tsx`
+In the prefill effects added last cycle, read `data.defaultName` (instead of `data.displayName`). Keep the one-shot "only when field is empty" guard so typed input is never clobbered.
 
-### 1c. Tests
-- `__tests__/lib/tmdb.test.ts` — add cases for `buildStreamingUrl`: provider-name match, internal-id fallback, name-variant ("Amazon Prime Video" → primevideo), unknown → null, title encoding.
-- `__tests__/components/MatchResult.test.tsx` — update the two TMDB-href assertions (lines 54-76) to expect the Netflix search URL for the Netflix fixtures; add/keep a fallback case where an unmapped service still yields the TMDB link.
-
-**Acceptance:** Given a matched movie on Netflix, the "Watch on Netflix" CTA `href` is `https://www.netflix.com/search?q=Parasite` (not a themoviedb.org URL). An unrecognized service still produces a working CTA via the TMDB fallback.
+**Acceptance:** A signed-in user who previously joined a room as "Al" sees "Al" prefilled; a signed-in user who never joined one sees their full account name; both remain editable; signed-out → empty.
 
 ---
 
-## Task 2 — Prefill the name when signed in
+## Task 2 — Host approval popup for mid-session joiners
 
-### 2a. `app/api/user/preferences/route.ts` — return `displayName` from GET
-Add `displayName: true` to the `select` and include `displayName` in the JSON response. PUT is unchanged.
+### 2a. `components/JoinRequestModal.tsx` (NEW)
+Presentational modal (mirrors `HostFilterEditor`'s overlay style). Props:
+`{ pendingMembers: {id; displayName}[]; onApprove: (id, 'accept'|'reject') => void; approvingId: string | null }`.
+Behavior (self-contained):
+- `pendingMembers.length === 0` → render nothing.
+- Otherwise auto-open a centered modal: a row per pending member with **Accept** and **Deny** buttons (disabled while `approvingId` is set), calling `onApprove`.
+- "Not now" button sets internal `dismissed = true` → modal hides and a compact fixed pill "● N waiting to join — Review" renders instead (click → reopen).
+- A `useEffect` tracks previous pending ids in a ref; when a **new** id appears, reset `dismissed = false` so a fresh request re-pops the modal.
 
-### 2b. `app/page.tsx` — prefill the shared `name`
-Add an effect: when `session?.user?.id` is present, `GET /api/user/preferences`; on success set `name` to the returned `displayName` **only if the field is still empty** (one-shot guard so it never clobbers typed input). Anonymous → endpoint 401s → leave empty.
+### 2b. `app/room/[code]/vote/page.tsx`
+- Import and render `<JoinRequestModal pendingMembers={state.pendingMembers ?? []} onApprove={handleApproval} approvingId={approvingId} />` for hosts (alongside `HostFilterEditor`).
+- Remove the inline pending-requests box (current lines ~316-348). `handleApproval`/`approvingId` are unchanged.
 
-### 2c. `app/room/[code]/lobby/page.tsx` — prefill `joinName`
-Add an effect on mount: `GET /api/user/preferences`; on success set `joinName` to `displayName` **only if still empty**. 401/failure → leave empty (no `useSession` needed). Lives alongside the Task 3 fix in the same file.
+### 2c. `__tests__/components/JoinRequestModal.test.tsx` (NEW)
+- Renders nothing with no pending members.
+- Renders each pending name with Accept/Deny; clicking calls `onApprove(id, 'accept'|'reject')`.
+- "Not now" hides the modal and shows the review pill; clicking the pill reopens it.
 
-**Acceptance:** A signed-in user opening the home page sees their display name pre-filled in "Your name"; opening a room link sees it pre-filled in the join form; both remain editable; a signed-out user sees an empty field.
+**Acceptance:** With the room in VOTING, when a new person joins, the host immediately sees a popup naming them with Accept/Deny; accepting admits them (their movies load), denying removes them; the joiner keeps seeing "Waiting for the host…" until the host acts.
 
 ---
 
-## Task 3 — Fix the second-user "Loading movies…" hang
+## Task 3 — Depth-band reshuffle (moderate shift)
 
-### 3a. `app/room/[code]/lobby/page.tsx` — gate redirect on membership + redirect after join
-1. In `loadRoom` (currently line 73), **only** call `handleRedirect(data.status)` when `data.currentMemberId !== null`. A non-member (no session) stays on the lobby and sees the "Join this room" form even when the room is `VOTING`.
-2. In `handleJoin`, after a successful join + room refetch, call `handleRedirect(data.status)` so a mid-session joiner is routed to `/vote` (which already renders the pending-approval "Waiting for the host…" screen) and a lobby joiner stays put (no-op for `LOBBY`).
+### 3a. `lib/tmdb.ts`
+Replace `DEPTH_BANDS` (and refresh the explanatory comment) with the user-approved moderate shift:
 
-The 3s poll effect already 401s for non-members and returns early, so no change needed there.
+```ts
+export const DEPTH_BANDS: Record<number, { gte: number; lte?: number }> = {
+  1: { gte: 3000 },            // Crowd-Pleaser
+  2: { gte: 1000, lte: 2999 }, // Easy Watch
+  3: { gte: 350, lte: 999 },   // The Sweet Spot (default)
+  4: { gte: 120, lte: 349 },   // Deep Cut
+  5: { gte: 40, lte: 119 },    // Certified Cinephile
+}
+```
 
-**Acceptance:** With a room in `VOTING`, opening the shared `/room/{code}/lobby` link as a brand-new browser shows the join form (no infinite spinner); after entering a name and joining, the user lands on `/vote` showing "Waiting for the host…"; the host sees and can accept the join request, after which the joiner's movies load.
+### 3b. `__tests__/lib/tmdb.test.ts`
+Update the band assertions: L1 `gte=3000` (no cap), L3 `gte=350`/`lte=999`, L5 `gte=40`/`lte=119`. The monotonic-descending-floors test and the no-depth `gte=100` test are unaffected.
+
+**Acceptance:** `buildDiscoverUrl(['netflix'], { depth: 3 })` yields `vote_count.gte=350` & `vote_count.lte=999`; floors stay strictly descending across levels 1→5.
 
 ---
 
 ## Schema changes
-None. No Prisma model or migration changes.
+None.
 
 ## API changes
-- `GET /api/rooms/[code]` — no change (already returns `currentMemberId`).
-- `GET /api/user/preferences` — response gains `displayName: string`.
+- `GET /api/user/preferences` — response gains `defaultName: string`.
+- No other API changes; approval reuses `POST /api/rooms/[code]/approvals`.
 
 ## Component changes
-- `components/MatchResult.tsx` — watch CTA href now points to the streaming service.
-- `app/page.tsx` — name field prefilled for signed-in users.
-- `app/room/[code]/lobby/page.tsx` — join-name prefilled; redirect now gated on membership and fired after join.
+- New `JoinRequestModal`; vote page swaps its inline pending box for the modal.
+- Home + lobby name prefill now sources `defaultName`.
 
 ## Verification (TEST state)
-`bash scripts/verify.sh` → `npm run typecheck` + `npm run lint` + `npm test` must exit 0. The updated/added Jest cases lock R1; R2 and R3 (client-component flows) are confirmed by manual run-through per the acceptance criteria above.
+`bash scripts/verify.sh` → typecheck + lint + jest must exit 0. New/updated Jest cases lock R2 (modal) and R3 (bands); R1 and the vote-page wiring are confirmed against the acceptance criteria.

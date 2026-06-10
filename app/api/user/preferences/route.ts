@@ -17,8 +17,17 @@ export async function GET() {
     return NextResponse.json({ error: 'User not found' }, { status: 404 })
   }
 
+  // The most recent name this user joined a room under; fall back to their full
+  // account name when they've never joined one.
+  const lastMember = await prisma.member.findFirst({
+    where: { userId: session.user.id },
+    orderBy: { joinedAt: 'desc' },
+    select: { displayName: true },
+  })
+
   return NextResponse.json({
     displayName: user.displayName,
+    defaultName: lastMember?.displayName ?? user.displayName,
     savedServices: user.savedServices,
     savedFilters: user.savedFilters,
   })
