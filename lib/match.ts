@@ -32,9 +32,12 @@ export async function checkForMatch(roomId: string, tmdbMovieId: string): Promis
   // Guard on status so only a room that is still VOTING can transition to MATCHED.
   // A concurrent request may have already advanced/drained/matched it — never
   // resurrect a terminal room, and don't report a match we didn't actually write.
+  // Bump queueVersion so the change busts the poll's 304 fast-path — otherwise
+  // other approved members (who short-circuit on an unchanged version) would
+  // never see status flip to MATCHED now that votes no longer advance the queue.
   const updated = await prisma.room.updateMany({
     where: { id: roomId, status: 'VOTING' },
-    data: { status: 'MATCHED', matchedMovieId: tmdbMovieId },
+    data: { status: 'MATCHED', matchedMovieId: tmdbMovieId, queueVersion: { increment: 1 } },
   })
   if (updated.count === 0) return null
 

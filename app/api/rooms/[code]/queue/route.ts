@@ -67,19 +67,14 @@ export async function GET(
     const excludedIds = [...new Set([...votedIds, ...rejectedIds, ...watchedIds])]
     const notInClause = excludedIds.length ? excludedIds : ['__none__']
 
-    stage = 'member-queue-find'
-    const memberQueueEntry = await prisma.memberQueue.findFirst({
-      where: { memberId: member.id, tmdbMovieId: { notIn: notInClause } },
+    // The member's "current card" is the lowest-position room-queue entry they
+    // haven't voted on, that nobody has vetoed, and that isn't filtered as seen.
+    // Sourcing from RoomQueue (not MemberQueue) means each member advances
+    // independently and a host requeue (which appends to RoomQueue) is picked up.
+    stage = 'room-queue-find'
+    const nextEntry = await prisma.roomQueue.findFirst({
+      where: { roomId: room.id, tmdbMovieId: { notIn: notInClause } },
       orderBy: { position: 'asc' },
-    })
-
-    if (!memberQueueEntry) {
-      return NextResponse.json(null)
-    }
-
-    stage = 'room-queue-lookup'
-    const nextEntry = await prisma.roomQueue.findUnique({
-      where: { roomId_tmdbMovieId: { roomId: room.id, tmdbMovieId: memberQueueEntry.tmdbMovieId } },
     })
 
     if (!nextEntry) {
@@ -87,8 +82,8 @@ export async function GET(
     }
 
     stage = 'remaining-count'
-    const remaining = await prisma.memberQueue.count({
-      where: { memberId: member.id, tmdbMovieId: { notIn: notInClause } },
+    const remaining = await prisma.roomQueue.count({
+      where: { roomId: room.id, tmdbMovieId: { notIn: notInClause } },
     })
 
     stage = 'tmdb-fetch'

@@ -38,7 +38,7 @@ describe('checkForMatch', () => {
     expect(result).toBe('movie-1')
     expect(updateMany).toHaveBeenCalledWith({
       where: { id: 'room-1', status: 'VOTING' },
-      data: { status: 'MATCHED', matchedMovieId: 'movie-1' },
+      data: { status: 'MATCHED', matchedMovieId: 'movie-1', queueVersion: { increment: 1 } },
     })
   })
 

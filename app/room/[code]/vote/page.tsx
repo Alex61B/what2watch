@@ -72,6 +72,12 @@ export default function VotePage() {
   // automatically when the card changes).
   const [seenMovieId, setSeenMovieId] = useState<string | null>(null);
   const [cardKey, setCardKey] = useState(0);
+  // The member's own current card, fetched from /queue. Each member advances
+  // independently — the card only changes on this member's own action, so another
+  // person's "nope" never moves the card you're looking at. undefined = loading,
+  // null = the member has voted on everything (their deck is exhausted).
+  const [card, setCard] = useState<Movie | null | undefined>(undefined);
+  const [remaining, setRemaining] = useState(0);
 
   const stoppedRef = useRef(false);
   const lastVersionRef = useRef<number | null>(null);
@@ -118,6 +124,40 @@ export default function VotePage() {
     };
   }, [pollOnce]);
 
+  // Fetch THIS member's current card. Called on mount and after the member's own
+  // vote/seen action only — never on a background poll — so others' votes can't
+  // shuffle the card under them.
+  const fetchCard = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/rooms/${code}/queue`, { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data === null) {
+        setCard(null);
+        setRemaining(0);
+        return;
+      }
+      setCard(data.movie ?? null);
+      setRemaining(typeof data.remaining === "number" ? data.remaining : 0);
+    } catch {
+      // best-effort; the effect below retries while the deck is empty
+    }
+  }, [code]);
+
+  // Load the card once the member is an admitted voter, and keep retrying while
+  // the deck reads empty (recovers from a transient fetch miss and picks up a
+  // host requeue). A populated card is left untouched here — it only changes on
+  // this member's own action.
+  useEffect(() => {
+    if (!state || state.pendingApproval || state.notAdmitted) return;
+    if (state.status !== "VOTING") return;
+    if (card !== undefined && card !== null) return;
+    // Defer (like the poll loop) so the fetch's setState isn't called
+    // synchronously inside the effect body.
+    const id = setTimeout(() => void fetchCard(), 0);
+    return () => clearTimeout(id);
+  }, [state, card, fetchCard]);
+
   // Record the seen-it flag (without removing the movie) — used when "Skip the
   // Reruns" is OFF and the user has checked the box before voting.
   const recordSeen = useCallback(
@@ -137,8 +177,8 @@ export default function VotePage() {
 
   const handleVote = useCallback(
     async (vote: boolean) => {
-      if (submittingRef.current || !state?.currentMovie) return;
-      const tmdbMovieId = state.currentMovie.tmdbId;
+      if (submittingRef.current || !card) return;
+      const tmdbMovieId = card.tmdbId;
       const wasSeen = seenMovieId === tmdbMovieId;
 
       setSubmitting(true);
@@ -147,7 +187,7 @@ export default function VotePage() {
       try {
         const submit = (async () => {
           // Skip-reruns OFF: record the seen-it flag alongside the vote.
-          if (wasSeen && !state.watchedFilter) void recordSeen(tmdbMovieId);
+          if (wasSeen && !state?.watchedFilter) void recordSeen(tmdbMovieId);
           const res = await fetch(`/api/rooms/${code}/votes`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -161,7 +201,8 @@ export default function VotePage() {
               return;
             }
           }
-          await pollOnce();
+          // Advance only THIS member to their next card.
+          await fetchCard();
         })();
         await Promise.all([submit, sleep(EXIT_ANIM_MS)]);
       } finally {
@@ -171,14 +212,14 @@ export default function VotePage() {
         if (!stoppedRef.current) setCardKey((k) => k + 1);
       }
     },
-    [state, seenMovieId, code, router, pollOnce, recordSeen]
+    [card, seenMovieId, state?.watchedFilter, code, router, fetchCard, recordSeen]
   );
 
-  // Skip-reruns ON: marking seen removes the movie for the whole room (the
-  // server advances the shared queue).
+  // Skip-reruns ON: marking seen records it (removed from every deck via /queue's
+  // room-wide watched exclusion) and advances this member to their next card.
   const handleRemoveSeen = useCallback(async () => {
-    if (markingWatched || !state?.currentMovie) return;
-    const tmdbMovieId = state.currentMovie.tmdbId;
+    if (markingWatched || !card) return;
+    const tmdbMovieId = card.tmdbId;
     setMarkingWatched(true);
     try {
       await fetch(`/api/rooms/${code}/watched`, {
@@ -186,23 +227,22 @@ export default function VotePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tmdbMovieId }),
       });
-      await pollOnce();
+      await fetchCard();
     } finally {
       setMarkingWatched(false);
       setSeenMovieId(null);
       if (!stoppedRef.current) setCardKey((k) => k + 1);
     }
-  }, [markingWatched, state, code, pollOnce]);
+  }, [markingWatched, card, code, fetchCard]);
 
   const handleToggleSeen = useCallback(() => {
-    const movie = state?.currentMovie;
-    if (!movie) return;
+    if (!card) return;
     if (state?.watchedFilter) {
       void handleRemoveSeen();
     } else {
-      setSeenMovieId((prev) => (prev === movie.tmdbId ? null : movie.tmdbId));
+      setSeenMovieId((prev) => (prev === card.tmdbId ? null : card.tmdbId));
     }
-  }, [state, handleRemoveSeen]);
+  }, [card, state?.watchedFilter, handleRemoveSeen]);
 
   const handleApproval = useCallback(
     async (memberId: string, action: "accept" | "reject") => {
@@ -227,7 +267,7 @@ export default function VotePage() {
     void pollOnce();
   }, [pollOnce]);
 
-  if (state === undefined) {
+  if (!state) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-canvas px-4 text-muted">
         <p>Loading movies…</p>
@@ -267,30 +307,72 @@ export default function VotePage() {
     return <DrainedScreen isHost={state.isHost} code={code} />;
   }
 
-  if (!state?.currentMovie) {
+  // Host-only overlays, shared by the voting and "caught up" screens so the host
+  // can always approve joiners and broaden the filters.
+  const hostOverlays = state.isHost ? (
+    <>
+      <HostFilterEditor
+        code={code}
+        open={editorOpen}
+        onClose={() => setEditorOpen(false)}
+        onApplied={handleFiltersApplied}
+      />
+      <JoinRequestModal
+        pendingMembers={state.pendingMembers ?? []}
+        onApprove={handleApproval}
+        approvingId={approvingId}
+      />
+    </>
+  ) : null;
+
+  if (card === undefined) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-canvas px-4 text-muted">
-        <p>Waiting for the host to start…</p>
+        <p>Loading movies…</p>
+      </main>
+    );
+  }
+
+  if (card === null) {
+    return (
+      <main className="flex h-[100dvh] flex-col items-center justify-center bg-canvas px-4 text-ink">
+        <div className="w-full max-w-sm space-y-4 text-center">
+          <h1 className="font-serif text-3xl font-bold">You&apos;re all caught up</h1>
+          <p className="text-muted">
+            You&apos;ve voted on every movie. Hang tight while the others finish
+            {state.isHost ? " — or broaden the filters to add more." : "…"}
+          </p>
+          {state.isHost && (
+            <button
+              type="button"
+              onClick={() => setEditorOpen(true)}
+              className="inline-block rounded-none bg-ink px-6 py-3 text-sm font-semibold uppercase tracking-wide text-canvas transition-opacity hover:opacity-90"
+            >
+              Broaden the filters
+            </button>
+          )}
+        </div>
+        {hostOverlays}
       </main>
     );
   }
 
   const members = state.members ?? [];
   const watching = members.length || state.memberCount;
-  const seen = seenMovieId === state.currentMovie.tmdbId;
+  const seen = seenMovieId === card.tmdbId;
 
   return (
-    <main className="min-h-screen bg-canvas text-ink">
-      <div className="mx-auto w-full max-w-md px-5 py-6 sm:px-6">
+    <main className="flex h-[100dvh] flex-col bg-canvas text-ink">
+      <div className="mx-auto flex w-full max-w-md flex-1 flex-col overflow-hidden px-5 py-3 sm:px-6">
         <RoomCodeBar
           code={code}
           onEditFilters={state.isHost ? () => setEditorOpen(true) : undefined}
         />
 
         {/* Progress / roster row */}
-        <div className="mt-6 flex items-center justify-between gap-3">
+        <div className="mt-3 flex shrink-0 items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className={EYEBROW}>Movie {state.currentPosition + 1}</p>
+            <p className={EYEBROW}>{remaining} left to pik</p>
             <div className="mt-1 h-[3px] w-16 bg-accent" />
           </div>
           <button
@@ -304,7 +386,7 @@ export default function VotePage() {
         </div>
 
         {rosterOpen && members.length > 0 && (
-          <ul className="mt-2 space-y-1 border border-line bg-surface px-4 py-3">
+          <ul className="mt-2 max-h-32 shrink-0 space-y-1 overflow-y-auto border border-line bg-surface px-4 py-3">
             {members.map((m) => (
               <li key={m.id} className="text-sm text-muted">
                 {m.displayName}
@@ -314,10 +396,10 @@ export default function VotePage() {
           </ul>
         )}
 
-        <div className="mt-5">
+        <div className="mt-3 min-h-0 flex-1">
           <VotingCard
             key={cardKey}
-            movie={state.currentMovie}
+            movie={card}
             onVote={handleVote}
             disabled={submitting || markingWatched}
             seen={seen}
@@ -327,22 +409,7 @@ export default function VotePage() {
         </div>
       </div>
 
-      {state.isHost && (
-        <HostFilterEditor
-          code={code}
-          open={editorOpen}
-          onClose={() => setEditorOpen(false)}
-          onApplied={handleFiltersApplied}
-        />
-      )}
-
-      {state.isHost && (
-        <JoinRequestModal
-          pendingMembers={state.pendingMembers ?? []}
-          onApprove={handleApproval}
-          approvingId={approvingId}
-        />
-      )}
+      {hostOverlays}
     </main>
   );
 }

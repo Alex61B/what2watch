@@ -2,9 +2,12 @@
  * @jest-environment node
  *
  * Route tests for GET /api/rooms/[code]/queue — the per-member "next card".
- * Covers the guards, the voted/rejected/watched exclusion (incl. the watchedFilter
- * OR-clause for a linked user), the null short-circuits (no eligible card, missing
- * room-queue row, TMDB failure), the heartbeat, and the hydrated success shape.
+ * The card is sourced from RoomQueue (lowest position the member hasn't voted on,
+ * nobody has vetoed, and isn't filtered as seen), so each member advances
+ * independently and a host requeue is picked up. Covers the guards, the
+ * voted/rejected/watched exclusion (incl. the watchedFilter OR-clause for a
+ * linked user), the null short-circuits (no eligible card, TMDB failure), the
+ * heartbeat, and the hydrated success shape.
  */
 import { GET as getQueue } from '@/app/api/rooms/[code]/queue/route'
 import { prisma } from '@/lib/prisma'
@@ -17,8 +20,7 @@ jest.mock('@/lib/prisma', () => ({
     room: { findUnique: jest.fn() },
     vote: { findMany: jest.fn() },
     watchedMovie: { findMany: jest.fn() },
-    memberQueue: { findFirst: jest.fn(), count: jest.fn() },
-    roomQueue: { findUnique: jest.fn() },
+    roomQueue: { findFirst: jest.fn(), count: jest.fn() },
   },
 }))
 jest.mock('@/lib/tmdb', () => ({ getMovieById: jest.fn() }))
@@ -39,9 +41,8 @@ const memberUpdate = prisma.member.update as jest.Mock
 const roomFindUnique = prisma.room.findUnique as jest.Mock
 const voteFindMany = prisma.vote.findMany as jest.Mock
 const watchedFindMany = prisma.watchedMovie.findMany as jest.Mock
-const memberQueueFindFirst = prisma.memberQueue.findFirst as jest.Mock
-const memberQueueCount = prisma.memberQueue.count as jest.Mock
-const roomQueueFindUnique = prisma.roomQueue.findUnique as jest.Mock
+const roomQueueFindFirst = prisma.roomQueue.findFirst as jest.Mock
+const roomQueueCount = prisma.roomQueue.count as jest.Mock
 const mockMovie = getMovieById as jest.Mock
 
 const ctx = (code: string) => ({ params: Promise.resolve({ code }) })
@@ -62,12 +63,10 @@ beforeEach(() => {
   voteFindMany.mockResolvedValue([])
   watchedFindMany.mockReset()
   watchedFindMany.mockResolvedValue([])
-  memberQueueFindFirst.mockReset()
-  memberQueueFindFirst.mockResolvedValue({ tmdbMovieId: '10' })
-  memberQueueCount.mockReset()
-  memberQueueCount.mockResolvedValue(5)
-  roomQueueFindUnique.mockReset()
-  roomQueueFindUnique.mockResolvedValue({ watchUrl: 'http://w', streamingService: 'netflix' })
+  roomQueueFindFirst.mockReset()
+  roomQueueFindFirst.mockResolvedValue({ tmdbMovieId: '10', watchUrl: 'http://w', streamingService: 'netflix' })
+  roomQueueCount.mockReset()
+  roomQueueCount.mockResolvedValue(5)
   mockMovie.mockReset()
   mockMovie.mockResolvedValue({ tmdbId: '10', title: 'Parasite' })
 })
@@ -107,15 +106,15 @@ describe('GET /queue', () => {
     })
   })
 
-  it('returns null when no eligible card remains in the member queue', async () => {
+  it('orders the next card by room-queue position', async () => {
     authAs('AAA-11')
-    memberQueueFindFirst.mockResolvedValue(null)
-    expect(await (await getQueue(req(), ctx('AAA-11'))).json()).toBeNull()
+    await getQueue(req(), ctx('AAA-11'))
+    expect(roomQueueFindFirst.mock.calls[0][0]).toMatchObject({ orderBy: { position: 'asc' } })
   })
 
-  it('returns null when the member-queue movie is absent from the room queue', async () => {
+  it('returns null when no eligible card remains in the room queue', async () => {
     authAs('AAA-11')
-    roomQueueFindUnique.mockResolvedValue(null)
+    roomQueueFindFirst.mockResolvedValue(null)
     expect(await (await getQueue(req(), ctx('AAA-11'))).json()).toBeNull()
   })
 
@@ -136,7 +135,7 @@ describe('GET /queue', () => {
 
     await getQueue(req(), ctx('AAA-11'))
 
-    const where = memberQueueFindFirst.mock.calls[0][0].where as { tmdbMovieId: { notIn: string[] } }
+    const where = roomQueueFindFirst.mock.calls[0][0].where as { tmdbMovieId: { notIn: string[] } }
     expect(new Set(where.tmdbMovieId.notIn)).toEqual(new Set(['1', '2', '3']))
   })
 

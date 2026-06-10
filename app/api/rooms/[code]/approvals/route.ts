@@ -45,5 +45,9 @@ export async function POST(
     await prisma.member.update({ where: { id: target.id }, data: { leftAt: new Date() } })
   }
 
+  // Bump the room version so the host's poll (and the approved member's) sees the
+  // change on the next tick instead of being hidden behind a stale ETag 304.
+  await prisma.room.update({ where: { id: room.id }, data: { queueVersion: { increment: 1 } } })
+
   return NextResponse.json({ ok: true })
 }

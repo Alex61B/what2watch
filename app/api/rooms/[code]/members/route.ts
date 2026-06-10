@@ -76,6 +76,11 @@ export async function POST(
       }
     }
 
+    // Bump the room version so membership changes invalidate the poll's ETag
+    // fast-path — otherwise a host (or proxy) can serve a stale 304 and miss the
+    // new pending request until the queue happens to advance.
+    await tx.room.update({ where: { id: room.id }, data: { queueVersion: { increment: 1 } } })
+
     return created
   })
 

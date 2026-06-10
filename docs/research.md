@@ -1,86 +1,62 @@
-# Research — Last-used name default, host approval popup, depth-band reshuffle
+# Research — Cycle 2: Per-member decks (a "nope" only affects you) + card fits one screen
 
-Three follow-up requests, all building on the previous cycle:
+The risky part, isolated from Cycle 1. Two changes:
 
-1. **Name default = last-used name, else full user name.** Prefill the join/create name with the most recent name the user joined a room under; if they've never joined one, use their complete account name. Still editable.
-2. **Host approval popup.** When someone joins after the room has started, the joiner sees "Waiting for the host…". Give the **host** a prominent popup to approve or deny that person (today it's only a small inline box on the vote screen).
-3. **Depth-band reshuffle (moderate shift, user-approved).** Level 3 (the default) is too niche. Raise every level's TMDB review-count floor so the default lands on recognizable films.
+1. **A "nope" must not yank everyone forward.** Today everyone votes on one shared card (`room.currentPosition`); any "no" calls `advanceQueueAtomic` and moves the whole room. Switch to **per-member decks**: each person swipes their own card at their own pace. A "nope" removes the movie from everyone's *upcoming* deck (user's choice) but never interrupts the card someone is currently viewing. Match = everyone liked the same movie.
+2. **VotingCard must fit one screen** (no scrolling to reach the Nope/Pik buttons).
 
 ---
 
 ## 1. Requirements Summary
 
-### R1 — Last-used name default
-- "Last used name" = the most recent `Member.displayName` for this signed-in user (`Member.userId == session.user.id`, latest `joinedAt`).
-- "Complete name of the user" = `User.displayName` (set from Google `name` / signup name — `auth.ts:13-19`, `signup/route.ts:33`).
-- Resolution: `lastUsedName ?? user.displayName`. Applies to both name inputs prefilled last cycle: home (`app/page.tsx`) and lobby (`app/room/[code]/lobby/page.tsx`).
+### R1 — Per-member decks
+Current model (read from source):
+- `poll/route.ts` serves the card at the shared `room.currentPosition` to everyone (`currentMovie`).
+- `votes/route.ts`: a `!vote` (no) runs `advanceQueueAtomic` → bumps shared `currentPosition`/`queueVersion` for everyone (the disorienting jump); a `vote` (yes) runs `checkForMatch`; both re-validate against the shared card via a staleness 409.
+- `watched/route.ts`: marking seen with skip-reruns ON also `advanceQueueAtomic`s the shared queue.
+- `queue/route.ts` *already* computes a per-member "next card" (first entry not in `member votes ∪ global rejects ∪ watched`) — but sources it from the half-retired `MemberQueue`, which `requeue` never refills (so requeued movies would be invisible).
 
-### R2 — Host approval popup
-- A mid-session joiner is created `approved:false` (`members/route.ts:45`) and sees the "Waiting for the host…" screen (`vote/page.tsx:254`).
-- The host currently sees a small **inline box** on the vote page (`vote/page.tsx:316-348`) listing pending members with Accept/Reject, calling `POST /api/rooms/[code]/approvals` via `handleApproval` (`vote/page.tsx:206-222`).
-- Want: a **modal popup** that surfaces automatically when a request arrives, with Accept/Deny per person. Replace the inline box with the modal; never lose access to pending requests.
+New model:
+- **Card source:** repurpose `queue/route.ts` to source the next card from **`RoomQueue`** (ordered by `position`), excluding `member votes ∪ global rejects (anyone voted no) ∪ watched`. This drops the `MemberQueue` dependency and means `requeue` (which appends to `RoomQueue`) automatically feeds decks. `remaining` = count of eligible `RoomQueue` rows.
+- **Card fetched on own action only:** the vote page fetches `/queue` on mount and after the member's own vote / seen-removal — **not** on every poll. This is what guarantees another person's "nope" never changes the card you're looking at.
+- **Votes:** `votes/route.ts` drops the shared-card staleness check and all `advanceQueueAtomic` calls. A "no" just records `vote:false` (→ now in global rejects → excluded from everyone's *future* deck). A "yes" records the vote and runs `checkForMatch`.
+- **Match propagation:** with no `advanceQueueAtomic`, `queueVersion` no longer changes on votes, so a match wouldn't bust the poll's 304 for other approved members. Fix: `checkForMatch` bumps `queueVersion` when it sets `MATCHED`. The triggering voter redirects from the vote response; everyone else redirects when their poll sees `status: MATCHED`.
+- **Watched:** `watched/route.ts` drops `advanceQueueAtomic`; the `WatchedMovie` row + `/queue`'s room-wide watched exclusion (skip-reruns ON) already removes it from every deck.
+- **Exhaustion:** when `/queue` returns `null` the member has voted on everything → show a per-member "all caught up — waiting for the others" screen (host gets a "broaden filters" affordance → existing `HostFilterEditor` → `requeue` appends + bumps `queueVersion` → the exhausted member's next poll re-fetches `/queue` and resumes). The room no longer auto-`DRAINED`s; that branch becomes dead but harmless.
 
-### R3 — Depth bands (moderate shift)
-`DEPTH_BANDS` in `lib/tmdb.ts:60-66` maps the 1–5 dial to `vote_count` bands. User-approved new values:
-
-| Level | Label | Now | New |
-|---|---|---|---|
-| 1 | Crowd-Pleaser | ≥500 | **≥3000** |
-| 2 | Easy Watch | 150–499 | **1000–2999** |
-| 3 | Sweet Spot (default) | 75–149 | **350–999** |
-| 4 | Deep Cut | 35–74 | **120–349** |
-| 5 | Certified Cinephile | 15–34 | **40–119** |
+### R2 — Card fits one screen
+`VotingCard` uses a fixed `aspect-[3/4]` poster that overflows the viewport, pushing the Nope/Pik buttons below the fold. Make the vote view a viewport-height (`h-[100dvh]`) flex column: compact header, poster fills the remaining space (`flex-1 min-h-0`, `object-cover`), info compact, buttons pinned. Swipe + click voting behavior unchanged.
 
 ---
 
-## 2. Stack Choices (existing patterns to leverage)
-
-- **R1:** extend the existing `GET /api/user/preferences` (already runs `auth()` + reads the `User` row) to also query the latest `Member` for the user and return a resolved `defaultName`. The client effects added last cycle just read `defaultName` instead of `displayName`. `Member` already has `userId`, `displayName`, `joinedAt` (`prisma/schema.prisma`).
-- **R2:** mirror the existing modal pattern in `components/HostFilterEditor.tsx` (`fixed inset-0 z-50 … bg-ink/40` overlay) in a new `components/JoinRequestModal.tsx`. Reuse the vote page's `handleApproval` + `approvingId`. Encapsulate auto-open / dismiss / re-open-on-new-request inside the component so the vote page change is minimal.
-- **R3:** pure data change to `DEPTH_BANDS` (+ comment). `FilterControls` shows only labels/blurbs (`DEPTH_LEVELS`), no band numbers — no UI change. The dial default stays level 3.
-
----
+## 2. Stack Choices
+- Reuse the tested `/queue` route shape (`{movie, remaining}` | `null`); only change its data source to `RoomQueue`.
+- Reuse `checkForMatch`'s guarded `updateMany` (add `queueVersion` increment).
+- Reuse `HostFilterEditor` (already rendered for hosts) for the host's broaden-on-exhaustion path; reuse `handleApproval`/poll for status/members/pending.
+- `advanceQueueAtomic` stays defined (still unit-tested in `lib/queue.test.ts`) but loses its callers — no deletion needed.
 
 ## 3. Environment Verification
-
-- No new env, no packages. No schema/migration changes (`Member.userId`/`joinedAt`, `User.displayName` already exist).
-- `DEFAULT_MIN_VOTES` (100) — the no-depth fallback floor — is **unchanged**; the request is about the 5 dial levels only, and the dial always defaults to 3, so a band is normally in effect.
-
----
+- No env/package/schema changes. `RoomQueue`, `Vote`, `WatchedMovie` already hold everything needed. `room.currentPosition` simply stops advancing (stays 0); `poll/route.ts` still computes an (now-unused) `currentMovie` — left as-is to keep the poll route and its tests out of scope.
 
 ## 4. Risks & Edge Cases
-
-- **R1 latest-member query:** must scope to `userId == session.user.id` and order by `joinedAt desc`. A user who never joined a room → no member → fall back to `user.displayName`. `displayName` is always non-empty (validated at create), so no empty-name prefill.
-- **R1 contract:** add a new `defaultName` field rather than overloading `displayName`, so the meaning stays clear. Nothing else consumes `displayName` from this endpoint (setup page reads only `savedServices`/`savedFilters`).
-- **R1 no-clobber:** keep last cycle's one-shot guard (only set when the field is still empty).
-- **R2 losing access if dismissed:** a dismissible modal must not strand pending requests. Mitigation: while dismissed with requests outstanding, show a compact "N waiting to join — review" re-open pill; a newly-arrived pending id auto-reopens the modal (track previous ids in a ref).
-- **R2 stale list after action:** after Accept/Deny, the member leaves `pendingMembers` on the next poll; the modal closes when the list empties. `handleApproval` already calls `pollOnce()`.
-- **R2 host-only:** the modal renders only when `state.isHost` (the poll already returns `pendingMembers` only meaningfully for the host UI; non-hosts never render it).
-- **R3 sparse results:** higher floors intersected with strict genre/rating filters can thin out results. The existing back-fill in `discoverMovies` (`lib/tmdb.ts:182-196`) already removes the band when banded results are sparse, so no 422 regression. Floors remain strictly descending (3000 > 1000 > 350 > 120 > 40) — the monotonic-bands test still holds.
-- **Existing tests:** `__tests__/lib/tmdb.test.ts` asserts the old band numbers (levels 1/3/5) — must be updated. The `vote_count.gte=100` no-depth test is unchanged.
-
----
+- **Card stability is the whole point:** the card must change *only* on the member's own action. Re-fetching `/queue` on poll would re-introduce the jump when two people sit on the same card and one nopes. Only re-fetch on poll when the member is **exhausted** (`card === null`) and `queueVersion` grew (to pick up a requeue).
+- **Voting a vetoed card:** since I don't re-fetch on others' actions, a member may "yes" a movie someone else already "no"d — harmless, it just can't reach unanimous and they advance normally. This is the deliberate "never interrupt the current card" trade.
+- **Match must reach everyone:** REQUIRES the `queueVersion` bump in `checkForMatch`; without it approved non-host members 304 and never see `MATCHED`.
+- **Spurious drain:** leaving `advanceQueueAtomic` in votes/watched would keep bumping `currentPosition` and could flip the room to `DRAINED` while members still have cards — so both calls must be removed.
+- **Hardened concurrency:** the removed staleness/CAS guards were for the shared queue; the remaining race (concurrent yes → match) is still covered by `checkForMatch`'s `updateMany(where status VOTING)` guard.
+- **Tests to rewrite:** `queue-route.test.ts` (RoomQueue source: `roomQueue.findFirst`/`count` instead of `memberQueue`), `votes.test.ts` (no staleness 409, no advance on no; vote recorded; yes→match), `watched.test.ts` (no advance; just upsert + hook), `match.test.ts` (assert `queueVersion` increment). `VotingCard.test.tsx` is behavioral (swipe/click → onVote) and should survive the layout change — verify.
+- **Vote page is a client component** (jsdom lacks fetch) — not unit-tested; rely on the route/lib tests + manual browser verification of the deck flow and layout.
 
 ## 5. Assumptions & Open Questions
-
-- **Assumption (R1):** "last used" is account-scoped (DB member history), consistent with last cycle's signed-in prefill — not a per-device localStorage value.
-- **Assumption (R2):** replacing the inline box with the modal (plus a re-open pill) is acceptable; the modal requires an explicit Accept/Deny per person but can be deferred via the pill.
-- **Resolved (R3):** distribution confirmed by the user as the "moderate shift" option.
-
----
+- **Resolved (user):** a nope removes the movie from everyone's upcoming deck but never interrupts the current card.
+- **Assumption:** same deck order for all (RoomQueue `position` order) is acceptable — per-member *shuffle* was a `MemberQueue` nicety not requested; progress is independent, which is what matters.
+- **Assumption:** per-member exhaustion + host "broaden filters" replaces the old room-level `DRAINED` screen acceptably (host can still broaden any time via the filter editor).
 
 ## 6. Out of Scope
-
-- No `auth.ts` / `app/api/auth/*` / `.env*` changes.
-- No Prisma schema or migration changes.
-- No change to depth **labels/blurbs** (`DEPTH_LEVELS`) or `DEFAULT_MIN_VOTES`.
-- No change to the joiner-side "Waiting for the host…" screen (only the host gets the new popup).
-- No new approval API; reuse `POST /api/rooms/[code]/approvals`.
-
----
+- `poll/route.ts` (left unchanged; its `currentMovie` becomes unused but harmless), `auth.ts`, `.env*`, schema/migrations.
+- Deleting `advanceQueueAtomic` / `MemberQueue` (retire later).
+- Per-member deck shuffle.
 
 ## 7. Readiness Verdict: READY FOR PLANNING
-
-- R1 → `app/api/user/preferences/route.ts` (+ `defaultName`), `app/page.tsx`, `app/room/[code]/lobby/page.tsx`.
-- R2 → new `components/JoinRequestModal.tsx`, `app/room/[code]/vote/page.tsx`, new `__tests__/components/JoinRequestModal.test.tsx`.
-- R3 → `lib/tmdb.ts` (`DEPTH_BANDS`), `__tests__/lib/tmdb.test.ts`.
+- R1 → `app/api/rooms/[code]/queue/route.ts`, `app/api/rooms/[code]/votes/route.ts`, `app/api/rooms/[code]/watched/route.ts`, `lib/match.ts`, `app/room/[code]/vote/page.tsx` (+ tests: `queue-route`, `votes`, `watched`, `match`).
+- R2 → `components/VotingCard.tsx` (+ `app/room/[code]/vote/page.tsx` container).

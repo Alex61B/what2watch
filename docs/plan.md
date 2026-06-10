@@ -1,78 +1,70 @@
-# Plan — Last-used name default, host approval popup, depth-band reshuffle
+# Plan — Cycle 2: Per-member decks + card fits one screen
 
-Derived from `docs/research.md`. Every file below is in `.workflow_plan_files`.
+Every file below is in `.workflow_plan_files`.
 
 ---
 
-## Task 1 — Default name = last-used name, else full user name
+## R1 — Per-member decks
 
-### 1a. `app/api/user/preferences/route.ts` (GET)
-After loading the user, query their most recent member row and return a resolved default:
-
+### 1a. `app/api/rooms/[code]/queue/route.ts` — source the card from RoomQueue
+Keep guards, heartbeat, and the `excludedIds = votes ∪ global rejects ∪ watched` computation. Replace the `memberQueue` lookup with `RoomQueue`:
 ```ts
-const lastMember = await prisma.member.findFirst({
-  where: { userId: session.user.id },
-  orderBy: { joinedAt: 'desc' },
-  select: { displayName: true },
+const nextEntry = await prisma.roomQueue.findFirst({
+  where: { roomId: room.id, tmdbMovieId: { notIn: notInClause } },
+  orderBy: { position: 'asc' },
 })
-return NextResponse.json({
-  displayName: user.displayName,
-  defaultName: lastMember?.displayName ?? user.displayName,
-  savedServices: user.savedServices,
-  savedFilters: user.savedFilters,
+if (!nextEntry) return NextResponse.json(null)
+const remaining = await prisma.roomQueue.count({
+  where: { roomId: room.id, tmdbMovieId: { notIn: notInClause } },
 })
+// TMDB hydrate (unchanged) → { movie: {...nextEntry.watchUrl/streamingService}, remaining }
 ```
+Drop the `memberQueue.findFirst`/`roomQueue.findUnique` round-trip.
 
-### 1b. `app/page.tsx` & 1c. `app/room/[code]/lobby/page.tsx`
-In the prefill effects added last cycle, read `data.defaultName` (instead of `data.displayName`). Keep the one-shot "only when field is empty" guard so typed input is never clobbered.
+### 1b. `app/api/rooms/[code]/votes/route.ts` — no shared advance, no staleness
+- Remove the `fresh` re-read + the staleness 409 + `advanceQueueAtomic` import/calls.
+- Validate the movie is in the room's `RoomQueue` (lightweight `findUnique`; 409 if absent).
+- Keep: approved-member guard, VOTING guard, `vote.upsert`, `lastSeenAt`, watchlist hook (on yes).
+- `!vote` → `return { matched: false }`. `vote` → `checkForMatch`; if matched, hydrate movie and `return { matched: true, movie }`, else `{ matched: false }`.
 
-**Acceptance:** A signed-in user who previously joined a room as "Al" sees "Al" prefilled; a signed-in user who never joined one sees their full account name; both remain editable; signed-out → empty.
+### 1c. `lib/match.ts` — bump queueVersion on MATCHED
+Add `queueVersion: { increment: 1 }` to the guarded `updateMany` that sets `status: 'MATCHED'`, so other members' polls (which 304 on an unchanged version) see the match.
+
+### 1d. `app/api/rooms/[code]/watched/route.ts` — drop the shared advance
+Remove the `advanceQueueAtomic` import and the entire `skip-reruns-advance` block; return `{ ok: true }`. Room-wide removal now comes from the `WatchedMovie` row + `/queue`'s room-wide watched exclusion.
+
+### 1e. `app/room/[code]/vote/page.tsx` — drive the card from `/queue`
+- New state: `card: Movie | null | undefined`, `remaining: number`. Keep `state` (poll) for status/members/pending/approval/host.
+- `fetchCard()`: GET `/queue`; `null` → `setCard(null)` (exhausted); else `setCard(data.movie)` + `setRemaining(data.remaining)`.
+- Fetch the card on first approved poll (mount) and after each own vote / seen-removal — **never** inside `pollOnce`.
+- Add an effect: when the poll's `queueVersion` increases **and** `card === null`, re-fetch (pick up a requeue).
+- `handleVote`: POST `/votes` for `card.tmdbId`; if `data.matched` → redirect to match; else `fetchCard()`. Keep the OFF-mode `recordSeen`.
+- `handleRemoveSeen` (skip-reruns ON): POST `/watched` → `fetchCard()`.
+- Render: `card === undefined` → "Loading movies…"; `card === null` → exhaustion screen (host: "Broaden filters" → `setEditorOpen(true)`); else `<VotingCard movie={card} … />`. Progress shows `remaining`.
+- Keep the `notAdmitted` / `pendingApproval` / poll-status redirects and the host `JoinRequestModal`/`HostFilterEditor`.
+
+### 1f–1i. Tests
+- `__tests__/api/queue-route.test.ts`: mock `roomQueue.findFirst`/`roomQueue.count`; assert the `notIn` exclusion is applied to the `roomQueue.findFirst` query; keep guard/heartbeat/null/shape cases.
+- `__tests__/api/votes.test.ts`: drop the staleness-409 and advance-on-NO cases; assert a NO records `vote:false` and returns `{matched:false}` with no advance; a YES runs match detection; keep auth/approval/VOTING guards.
+- `__tests__/api/watched.test.ts`: assert the upsert + hook happen and no advance occurs (no `advanceQueueAtomic`).
+- `__tests__/lib/match.test.ts`: assert the MATCHED `updateMany` includes `queueVersion: { increment: 1 }`.
+
+**Acceptance:** Two members vote independently; one hitting Nope advances only themselves and never changes the other's current card; a movie anyone Nopes is gone from both members' upcoming cards; when everyone Piks the same movie the whole room lands on the match screen; finishing your deck shows "waiting for the others", and a host broadening filters brings new cards back.
 
 ---
 
-## Task 2 — Host approval popup for mid-session joiners
+## R2 — Card fits one screen
 
-### 2a. `components/JoinRequestModal.tsx` (NEW)
-Presentational modal (mirrors `HostFilterEditor`'s overlay style). Props:
-`{ pendingMembers: {id; displayName}[]; onApprove: (id, 'accept'|'reject') => void; approvingId: string | null }`.
-Behavior (self-contained):
-- `pendingMembers.length === 0` → render nothing.
-- Otherwise auto-open a centered modal: a row per pending member with **Accept** and **Deny** buttons (disabled while `approvingId` is set), calling `onApprove`.
-- "Not now" button sets internal `dismissed = true` → modal hides and a compact fixed pill "● N waiting to join — Review" renders instead (click → reopen).
-- A `useEffect` tracks previous pending ids in a ref; when a **new** id appears, reset `dismissed = false` so a fresh request re-pops the modal.
+### 2a. `components/VotingCard.tsx`
+Root card → `flex h-full flex-col`; poster wrapper → `relative flex-1 min-h-0` (drop `aspect-[3/4]`), `Image fill object-cover`; info block compact (`p-4`, `line-clamp-2/3` overview); swipe hints compact; buttons `shrink-0`. Swipe/stamp/commit logic unchanged.
 
-### 2b. `app/room/[code]/vote/page.tsx`
-- Import and render `<JoinRequestModal pendingMembers={state.pendingMembers ?? []} onApprove={handleApproval} approvingId={approvingId} />` for hosts (alongside `HostFilterEditor`).
-- Remove the inline pending-requests box (current lines ~316-348). `handleApproval`/`approvingId` are unchanged.
+### 2b. `app/room/[code]/vote/page.tsx` (container, same file as 1e)
+Main → `flex h-[100dvh] flex-col`; inner wrapper → `flex w-full max-w-md flex-1 min-h-0 flex-col` with smaller vertical padding; the card sits in a `flex-1 min-h-0` slot so it fills the viewport without scrolling.
 
-### 2c. `__tests__/components/JoinRequestModal.test.tsx` (NEW)
-- Renders nothing with no pending members.
-- Renders each pending name with Accept/Deny; clicking calls `onApprove(id, 'accept'|'reject')`.
-- "Not now" hides the modal and shows the review pill; clicking the pill reopens it.
+### 2c. `__tests__/components/VotingCard.test.tsx`
+Verify it still passes after the layout change; adjust only if it asserts removed structural classes (behavioral swipe/click assertions should be untouched).
 
-**Acceptance:** With the room in VOTING, when a new person joins, the host immediately sees a popup naming them with Accept/Deny; accepting admits them (their movies load), denying removes them; the joiner keeps seeing "Waiting for the host…" until the host acts.
-
----
-
-## Task 3 — Depth-band reshuffle (moderate shift)
-
-### 3a. `lib/tmdb.ts`
-Replace `DEPTH_BANDS` (and refresh the explanatory comment) with the user-approved moderate shift:
-
-```ts
-export const DEPTH_BANDS: Record<number, { gte: number; lte?: number }> = {
-  1: { gte: 3000 },            // Crowd-Pleaser
-  2: { gte: 1000, lte: 2999 }, // Easy Watch
-  3: { gte: 350, lte: 999 },   // The Sweet Spot (default)
-  4: { gte: 120, lte: 349 },   // Deep Cut
-  5: { gte: 40, lte: 119 },    // Certified Cinephile
-}
-```
-
-### 3b. `__tests__/lib/tmdb.test.ts`
-Update the band assertions: L1 `gte=3000` (no cap), L3 `gte=350`/`lte=999`, L5 `gte=40`/`lte=119`. The monotonic-descending-floors test and the no-depth `gte=100` test are unaffected.
-
-**Acceptance:** `buildDiscoverUrl(['netflix'], { depth: 3 })` yields `vote_count.gte=350` & `vote_count.lte=999`; floors stay strictly descending across levels 1→5.
+**Acceptance:** On a phone viewport the poster, title row, and both Nope/Pik buttons are visible without scrolling.
 
 ---
 
@@ -80,12 +72,9 @@ Update the band assertions: L1 `gte=3000` (no cap), L3 `gte=350`/`lte=999`, L5 `
 None.
 
 ## API changes
-- `GET /api/user/preferences` — response gains `defaultName: string`.
-- No other API changes; approval reuses `POST /api/rooms/[code]/approvals`.
+- `GET /api/rooms/[code]/queue` now sources the card from `RoomQueue` (same response shape).
+- `POST /api/rooms/[code]/votes` no longer advances a shared queue; response keeps `{ matched, movie? }`.
+- `POST /api/rooms/[code]/watched` no longer advances; returns `{ ok: true }`.
 
-## Component changes
-- New `JoinRequestModal`; vote page swaps its inline pending box for the modal.
-- Home + lobby name prefill now sources `defaultName`.
-
-## Verification (TEST state)
-`bash scripts/verify.sh` → typecheck + lint + jest must exit 0. New/updated Jest cases lock R2 (modal) and R3 (bands); R1 and the vote-page wiring are confirmed against the acceptance criteria.
+## Verification
+`bash scripts/verify.sh` → typecheck + lint + jest exit 0. Route/lib tests lock R1; the client deck flow + R2 layout are confirmed by manual browser run-through.

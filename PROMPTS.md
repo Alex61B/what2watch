@@ -2,6 +2,47 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-10 — Cycle 2: per-member decks ("nope" only affects you) + card fits one screen
+
+**Prompt (summary):** A "nope" shouldn't yank the rest of the room to the next movie — just remove it
+from the deck (user chose: drop it from everyone's *upcoming* deck, never interrupt the card they're
+viewing). Also make the movie card fit one screen (no scrolling to the vote buttons).
+
+**Approach:** Moved from the shared `currentPosition` card to **per-member decks**. `/queue` now sources
+the current card from `RoomQueue` (lowest position not in `member votes ∪ global rejects ∪ watched`),
+so requeue feeds decks and each member advances independently. The vote page fetches its card from
+`/queue` only on mount + after the member's own vote/seen action (never on a poll), so others' votes
+never change your card; poll still drives status/members/pending/match. `votes` route drops the
+staleness check + `advanceQueueAtomic` (a NO just records a room-wide reject; a YES runs match);
+`watched` route drops its shared advance (removal handled by `/queue`'s watched exclusion);
+`checkForMatch` now bumps `queueVersion` so MATCHED propagates through the poll's 304 fast-path now
+that votes don't. Exhausting your deck shows a per-member "all caught up" screen (host can broaden
+filters). `VotingCard` + vote page restructured to a `h-[100dvh]` flex column (poster fills space,
+buttons pinned). Updated the queue/votes/watched/match suites accordingly.
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 184 Jest tests (remediation loops for
+a `set-state-in-effect` lint warning → deferred the card fetch via setTimeout, and a Jest mock
+hoisting/TDZ + arity fix in votes.test). The per-member deck flow and one-screen layout are
+client-side — confirmed against the acceptance criteria; worth a real two-device browser pass.
+
+## 2026-06-10 — Cycle 1: popup freshness + close, depth bump
+
+**Prompt (summary):** Host approval popup appears late (only after the host advances a card) and
+won't close after approving; also the depth levels are still too niche — bump again. (Split the
+larger per-member "nope" change into Cycle 2.)
+
+**Approach:** Root cause of the popup staleness: joins/approvals don't bump `room.queueVersion`, so
+the poll's ETag/304 fast-path hides membership changes until the queue advances (the poll route's own
+comment flags this gap). Fix at the source — bump `queueVersion` in the members-join transaction and
+in the approvals handler, so the host's poll refreshes within one tick. Plus `JoinRequestModal` now
+closes optimistically (a tapped Accept/Deny row vanishes immediately via a local `resolvedIds` set,
+independent of poll timing). Depth `DEPTH_BANDS` raised again: L1 ≥6000 · L2 2000–5999 · L3 800–1999
+· L4 250–799 · L5 80–249. Extended the `room.update` mock in the three suites that import the
+members/approvals routes.
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 185 Jest tests (one remediation loop
+for a `set-state-in-effect` lint error, fixed by dropping unnecessary effect-based pruning).
+
 ## 2026-06-10 — Last-used name default, host approval popup, depth-band reshuffle
 
 **Prompt (summary):** (1) Default the name field to the user's last-used name, falling back to their

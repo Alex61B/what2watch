@@ -40,6 +40,11 @@ jest.mock('@/lib/prisma', () => {
       room: {
         findUnique: async ({ where }: { where: { code?: string; id?: string } }) =>
           rooms.find(r => (where.code ? r.code === where.code : r.id === where.id)) ?? null,
+        update: async ({ where, data }: { where: { id: string }; data: { queueVersion?: { increment: number } } }) => {
+          const r = rooms.find(x => x.id === where.id)!
+          if (data?.queueVersion?.increment) r.queueVersion += data.queueVersion.increment
+          return r
+        },
       },
       member: {
         create: async ({ data }: { data: Partial<MemberRow> }) => {

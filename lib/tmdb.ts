@@ -58,11 +58,11 @@ export interface DiscoverFilters {
  * no upper cap. Floors stay strictly descending across levels.
  */
 export const DEPTH_BANDS: Record<number, { gte: number; lte?: number }> = {
-  1: { gte: 3000 },             // Crowd-Pleaser
-  2: { gte: 1000, lte: 2999 },  // Easy Watch
-  3: { gte: 350, lte: 999 },    // The Sweet Spot (default)
-  4: { gte: 120, lte: 349 },    // Deep Cut
-  5: { gte: 40, lte: 119 },     // Certified Cinephile
+  1: { gte: 6000 },             // Crowd-Pleaser
+  2: { gte: 2000, lte: 5999 },  // Easy Watch
+  3: { gte: 800, lte: 1999 },   // The Sweet Spot (default)
+  4: { gte: 250, lte: 799 },    // Deep Cut
+  5: { gte: 80, lte: 249 },     // Certified Cinephile
 }
 
 /** Default vote_count floor when no depth is selected (the app's prior behaviour). */

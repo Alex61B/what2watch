@@ -33,7 +33,7 @@ describe('JoinRequestModal', () => {
     expect(screen.getByText(/2 want to join/i)).toBeInTheDocument()
   })
 
-  it('calls onApprove with accept / reject for the right member', () => {
+  it('accept calls onApprove and optimistically removes the row, closing the popup', () => {
     render(
       <JoinRequestModal
         pendingMembers={[{ id: 'm1', displayName: 'Priya' }]}
@@ -43,9 +43,29 @@ describe('JoinRequestModal', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: /accept/i }))
     expect(onApprove).toHaveBeenCalledWith('m1', 'accept')
+    // Row disappears immediately (before any poll prop change); the lone member
+    // gone means the popup closes.
+    expect(screen.queryByText('Priya')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /accept/i })).not.toBeInTheDocument()
+  })
 
-    fireEvent.click(screen.getByRole('button', { name: /deny/i }))
+  it('deny calls onApprove with reject and optimistically removes only that member', () => {
+    render(
+      <JoinRequestModal
+        pendingMembers={[
+          { id: 'm1', displayName: 'Priya' },
+          { id: 'm2', displayName: 'Marcus' },
+        ]}
+        onApprove={onApprove}
+        approvingId={null}
+      />
+    )
+    const denyButtons = screen.getAllByRole('button', { name: /deny/i })
+    fireEvent.click(denyButtons[0])
     expect(onApprove).toHaveBeenCalledWith('m1', 'reject')
+    expect(screen.queryByText('Priya')).not.toBeInTheDocument()
+    // The other request stays open.
+    expect(screen.getByText('Marcus')).toBeInTheDocument()
   })
 
   it('disables the actions while an approval is in flight', () => {

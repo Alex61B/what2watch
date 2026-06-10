@@ -3,7 +3,6 @@ import { prisma } from '@/lib/prisma'
 import { getSessionToken } from '@/lib/session'
 import { checkForMatch } from '@/lib/match'
 import { getMovieById } from '@/lib/tmdb'
-import { advanceQueueAtomic } from '@/lib/queue'
 import { resolveMemberUserId } from '@/lib/link'
 import { addPreference } from '@/lib/preferences'
 
@@ -53,32 +52,16 @@ export async function POST(
       )
     }
 
-    stage = 'staleness-check'
-    // Re-read the room's live position/version: it may have advanced while we were
-    // parsing the body. Validate the vote against the card that's actually current
-    // now, and run the CAS advance below against these fresh values.
-    const fresh = await prisma.room.findUnique({
-      where: { id: room.id },
-      select: { currentPosition: true, queueVersion: true, status: true },
-    })
-    if (!fresh || fresh.status !== 'VOTING') {
-      return NextResponse.json({ error: 'Room is not in voting state' }, { status: 409 })
-    }
-    const currentEntry = await prisma.roomQueue.findFirst({
-      where: { roomId: room.id, position: fresh.currentPosition },
+    stage = 'movie-in-queue'
+    // Each member votes on their own card (from /queue), so there's no shared
+    // "current card" to validate against — just confirm the movie is part of this
+    // room's queue so we never persist a vote for a movie that isn't in play.
+    const queueEntryForVote = await prisma.roomQueue.findUnique({
+      where: { roomId_tmdbMovieId: { roomId: room.id, tmdbMovieId } },
       select: { tmdbMovieId: true },
     })
-
-    if (!currentEntry || currentEntry.tmdbMovieId !== tmdbMovieId) {
-      return NextResponse.json(
-        {
-          error: 'Stale vote',
-          currentPosition: fresh.currentPosition,
-          queueVersion: fresh.queueVersion,
-          currentMovieId: currentEntry?.tmdbMovieId ?? null,
-        },
-        { status: 409 }
-      )
+    if (!queueEntryForVote) {
+      return NextResponse.json({ error: 'Movie is not in this room' }, { status: 409 })
     }
 
     stage = 'vote-upsert'
@@ -103,10 +86,11 @@ export async function POST(
       }
     }
 
+    // A NO just records the down-vote. It's now a room-wide reject, so it drops
+    // out of every member's upcoming deck — but it never moves anyone off the card
+    // they're currently viewing (each member advances only on their own vote).
     if (!vote) {
-      stage = 'advance-no'
-      const advance = await advanceQueueAtomic(room.id, fresh.currentPosition, fresh.queueVersion)
-      return NextResponse.json({ matched: false, advance })
+      return NextResponse.json({ matched: false })
     }
 
     stage = 'check-match'
@@ -131,10 +115,7 @@ export async function POST(
       matchedMovie = { tmdbId: matchedMovieId, watchUrl: queueEntry?.watchUrl, streamingService: queueEntry?.streamingService }
     }
 
-    stage = 'advance-match'
-    const advance = await advanceQueueAtomic(room.id, room.currentPosition, room.queueVersion)
-
-    return NextResponse.json({ matched: true, movie: matchedMovie, advance })
+    return NextResponse.json({ matched: true, movie: matchedMovie })
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err))
     console.error('[votes] fatal error', {

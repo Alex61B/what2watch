@@ -29,6 +29,9 @@ export default function JoinRequestModal({
   approvingId,
 }: JoinRequestModalProps) {
   const [dismissed, setDismissed] = useState(false)
+  // Ids the host has already accepted/denied this tick — hidden immediately so
+  // the popup closes without waiting for the next poll to drop them.
+  const [resolvedIds, setResolvedIds] = useState<Set<string>>(new Set())
   const seenIdsRef = useRef<Set<string>>(new Set())
 
   useEffect(() => {
@@ -39,9 +42,15 @@ export default function JoinRequestModal({
     if (hasNew) setDismissed(false)
   }, [pendingMembers])
 
-  if (pendingMembers.length === 0) return null
+  function handleAction(memberId: string, action: 'accept' | 'reject') {
+    onApprove(memberId, action)
+    setResolvedIds((prev) => new Set(prev).add(memberId))
+  }
 
-  const count = pendingMembers.length
+  const visibleMembers = pendingMembers.filter((m) => !resolvedIds.has(m.id))
+  if (visibleMembers.length === 0) return null
+
+  const count = visibleMembers.length
 
   if (dismissed) {
     return (
@@ -68,7 +77,7 @@ export default function JoinRequestModal({
         </header>
 
         <ul className="flex-1 divide-y divide-line">
-          {pendingMembers.map((m) => (
+          {visibleMembers.map((m) => (
             <li key={m.id} className="flex items-center justify-between gap-3 px-5 py-4">
               <span className="flex min-w-0 items-center gap-3">
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center bg-accent text-sm font-bold text-accent-ink">
@@ -79,7 +88,7 @@ export default function JoinRequestModal({
               <span className="flex shrink-0 gap-2">
                 <button
                   type="button"
-                  onClick={() => onApprove(m.id, 'accept')}
+                  onClick={() => handleAction(m.id, 'accept')}
                   disabled={approvingId !== null}
                   className="bg-ink px-3.5 py-2 text-[11px] font-semibold uppercase tracking-wide text-canvas transition-opacity hover:opacity-90 disabled:opacity-40"
                 >
@@ -87,7 +96,7 @@ export default function JoinRequestModal({
                 </button>
                 <button
                   type="button"
-                  onClick={() => onApprove(m.id, 'reject')}
+                  onClick={() => handleAction(m.id, 'reject')}
                   disabled={approvingId !== null}
                   className="border border-ink px-3.5 py-2 text-[11px] font-semibold uppercase tracking-wide text-ink transition-colors hover:bg-ink hover:text-canvas disabled:opacity-40"
                 >

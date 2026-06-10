@@ -1,26 +1,25 @@
 /**
  * @jest-environment node
  *
- * Route tests for POST /api/rooms/[code]/votes — the main vote flow. Covers the
- * guards, the fresh-snapshot staleness check, queue advance on a NO, and match
- * detection on a YES. advanceQueueAtomic / checkForMatch are mocked (each has its
- * own unit suite); these assert the route's branching.
+ * Route tests for POST /api/rooms/[code]/votes — the per-member vote flow. Each
+ * member votes on their own card, so there's no shared-queue advance: a NO just
+ * records a down-vote (which becomes a room-wide reject) and a YES runs match
+ * detection. Covers the guards, the "movie is in this room" check, and the
+ * NO/YES branching. checkForMatch is mocked (it has its own unit suite).
  */
 import { POST as castVote } from '@/app/api/rooms/[code]/votes/route'
-import { advanceQueueAtomic } from '@/lib/queue'
 import { checkForMatch } from '@/lib/match'
 import { getMovieById } from '@/lib/tmdb'
 import { sessionCookieName } from '@/lib/session'
 
 interface Member { id: string; roomId: string; sessionToken: string; leftAt: Date | null; approved: boolean; userId: string | null }
 interface Room { id: string; code: string; status: string; currentPosition: number; queueVersion: number }
-interface Fresh { currentPosition: number; queueVersion: number; status: string }
 
 let mockMember: Member | null = null
 let mockRoom: Room | null = null
-let mockFresh: Fresh | null = null
-let mockCurrentEntry: { tmdbMovieId: string } | null = null
-let mockMatchEntry: { watchUrl: string; streamingService: string } | null = null
+let mockQueueEntry: { tmdbMovieId: string; watchUrl: string; streamingService: string } | null = null
+
+const mockVoteUpsert = jest.fn(async (_args: unknown) => ({}))
 
 jest.mock('@/lib/prisma', () => ({
   prisma: {
@@ -31,21 +30,17 @@ jest.mock('@/lib/prisma', () => ({
       update: jest.fn(async () => ({})),
     },
     room: {
-      findUnique: jest.fn(async ({ where }: { where: { code?: string; id?: string } }) => {
-        if (where.code) return mockRoom?.code === where.code ? mockRoom : null
-        if (where.id) return mockFresh
-        return null
-      }),
+      findUnique: jest.fn(async ({ where }: { where: { code?: string } }) =>
+        where.code && mockRoom?.code === where.code ? mockRoom : null
+      ),
     },
     roomQueue: {
-      findFirst: jest.fn(async () => mockCurrentEntry),
-      findUnique: jest.fn(async () => mockMatchEntry),
+      findUnique: jest.fn(async () => mockQueueEntry),
     },
-    vote: { upsert: jest.fn(async () => ({})) },
+    vote: { upsert: (args: unknown) => mockVoteUpsert(args) },
   },
 }))
 
-jest.mock('@/lib/queue', () => ({ advanceQueueAtomic: jest.fn() }))
 jest.mock('@/lib/match', () => ({ checkForMatch: jest.fn() }))
 jest.mock('@/lib/tmdb', () => ({ getMovieById: jest.fn() }))
 jest.mock('@/lib/link', () => ({ resolveMemberUserId: jest.fn(async () => null) }))
@@ -62,7 +57,6 @@ jest.mock('next/headers', () => ({
   }),
 }))
 
-const mockAdvance = advanceQueueAtomic as jest.Mock
 const mockMatch = checkForMatch as jest.Mock
 const mockMovie = getMovieById as jest.Mock
 const ctx = (code: string) => ({ params: Promise.resolve({ code }) })
@@ -81,10 +75,8 @@ function authAs(code: string, over: Partial<Member> = {}) {
 beforeEach(() => {
   mockMember = null
   mockRoom = { id: 'r1', code: 'AAA-11', status: 'VOTING', currentPosition: 2, queueVersion: 7 }
-  mockFresh = { currentPosition: 2, queueVersion: 7, status: 'VOTING' }
-  mockCurrentEntry = { tmdbMovieId: '10' }
-  mockMatchEntry = { watchUrl: 'http://w', streamingService: 'netflix' }
-  mockAdvance.mockReset()
+  mockQueueEntry = { tmdbMovieId: '10', watchUrl: 'http://w', streamingService: 'netflix' }
+  mockVoteUpsert.mockClear()
   mockMatch.mockReset()
   mockMovie.mockReset()
   jar.clear()
@@ -112,42 +104,37 @@ describe('POST /votes', () => {
     expect((await castVote(req({ tmdbMovieId: '10' }), ctx('AAA-11'))).status).toBe(400)
   })
 
-  it('409 stale vote when the submitted movie is not the current card', async () => {
+  it('409 when the movie is not part of this room', async () => {
     authAs('AAA-11')
-    mockCurrentEntry = { tmdbMovieId: '99' } // current card is a different movie
-    const res = await castVote(req({ tmdbMovieId: '10', vote: true }), ctx('AAA-11'))
-    expect(res.status).toBe(409)
-    expect((await res.json()).error).toMatch(/stale/i)
+    mockQueueEntry = null
+    expect((await castVote(req({ tmdbMovieId: '10', vote: true }), ctx('AAA-11'))).status).toBe(409)
   })
 
-  it('a NO vote advances the queue against the fresh snapshot', async () => {
+  it('a NO just records a down-vote without advancing or checking for a match', async () => {
     authAs('AAA-11')
-    mockAdvance.mockResolvedValue({ advanced: true, newPosition: 3, newVersion: 8, status: 'VOTING' })
     const res = await castVote(req({ tmdbMovieId: '10', vote: false }), ctx('AAA-11'))
-    const body = await res.json()
-    expect(body.matched).toBe(false)
-    expect(body.advance).toMatchObject({ advanced: true })
-    expect(mockAdvance).toHaveBeenCalledWith('r1', 2, 7) // fresh position/version
+    expect(await res.json()).toEqual({ matched: false })
+    expect(mockVoteUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ create: expect.objectContaining({ vote: false, tmdbMovieId: '10' }) })
+    )
     expect(mockMatch).not.toHaveBeenCalled()
   })
 
-  it('a YES vote with no match returns { matched: false } without advancing', async () => {
+  it('a YES vote with no match returns { matched: false }', async () => {
     authAs('AAA-11')
     mockMatch.mockResolvedValue(null)
     const res = await castVote(req({ tmdbMovieId: '10', vote: true }), ctx('AAA-11'))
     expect(await res.json()).toEqual({ matched: false })
-    expect(mockAdvance).not.toHaveBeenCalled()
+    expect(mockMatch).toHaveBeenCalledWith('r1', '10')
   })
 
   it('a YES vote that completes a match returns the hydrated movie', async () => {
     authAs('AAA-11')
     mockMatch.mockResolvedValue('10')
     mockMovie.mockResolvedValue({ tmdbId: '10', title: 'Parasite' })
-    mockAdvance.mockResolvedValue({ advanced: true, newPosition: 3, newVersion: 8, status: 'MATCHED' })
     const res = await castVote(req({ tmdbMovieId: '10', vote: true }), ctx('AAA-11'))
     const body = await res.json()
     expect(body.matched).toBe(true)
     expect(body.movie).toMatchObject({ title: 'Parasite', watchUrl: 'http://w', streamingService: 'netflix' })
-    expect(mockAdvance).toHaveBeenCalled()
   })
 })

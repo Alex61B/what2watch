@@ -56,20 +56,20 @@ describe('buildDiscoverUrl — depth → review-count band', () => {
 
   it('level 1 (Crowd-Pleaser) sets a high floor with no upper cap', () => {
     const url = buildDiscoverUrl(['netflix'], { depth: 1 })
-    expect(url).toContain('vote_count.gte=3000')
+    expect(url).toContain('vote_count.gte=6000')
     expect(url).not.toContain('vote_count.lte')
   })
 
   it('level 3 (Sweet Spot) sets a bounded mid band', () => {
     const url = buildDiscoverUrl(['netflix'], { depth: 3 })
-    expect(url).toContain('vote_count.gte=350')
-    expect(url).toContain('vote_count.lte=999')
+    expect(url).toContain('vote_count.gte=800')
+    expect(url).toContain('vote_count.lte=1999')
   })
 
   it('level 5 (Cinephile) sets the low, obscure band', () => {
     const url = buildDiscoverUrl(['netflix'], { depth: 5 })
-    expect(url).toContain('vote_count.gte=40')
-    expect(url).toContain('vote_count.lte=119')
+    expect(url).toContain('vote_count.gte=80')
+    expect(url).toContain('vote_count.lte=249')
   })
 
   it('bands tighten monotonically as depth increases', () => {

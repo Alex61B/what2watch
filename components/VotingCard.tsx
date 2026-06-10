@@ -92,9 +92,9 @@ export default function VotingCard({
     : `translateX(${dragX}px) rotate(${dragX * 0.04}deg)`
 
   return (
-    <div className="select-none">
+    <div className="flex h-full select-none flex-col">
       <div
-        className="relative flex flex-col overflow-hidden border border-ink bg-surface text-ink"
+        className="relative flex min-h-0 flex-1 flex-col overflow-hidden border border-ink bg-surface text-ink"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={endDrag}
@@ -107,8 +107,8 @@ export default function VotingCard({
           cursor: disabled ? 'default' : 'grab',
         }}
       >
-        {/* Poster */}
-        <div className="relative aspect-[3/4] w-full bg-surface-soft">
+        {/* Poster — fills the available height so the whole card fits one screen */}
+        <div className="relative min-h-0 w-full flex-1 bg-surface-soft">
           {movie.posterUrl ? (
             <Image
               src={movie.posterUrl}
@@ -164,8 +164,8 @@ export default function VotingCard({
         </div>
 
         {/* Info */}
-        <div className="flex flex-col gap-2 p-5">
-          <h2 className="font-serif text-2xl font-bold leading-tight">{movie.title}</h2>
+        <div className="flex shrink-0 flex-col gap-1 p-4">
+          <h2 className="font-serif text-xl font-bold leading-tight sm:text-2xl">{movie.title}</h2>
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
             {movie.year}
             {movie.runtime ? ` · ${movie.runtime} min` : ''}
@@ -175,24 +175,24 @@ export default function VotingCard({
             <span className="ml-2 font-semibold text-ink">{movie.rating}</span>
             <span className="ml-1 text-faint">/10 IMDB</span>
           </p>
-          <p className="mt-1 line-clamp-4 text-sm leading-relaxed text-muted">{movie.overview}</p>
+          <p className="line-clamp-2 text-sm leading-relaxed text-muted">{movie.overview}</p>
         </div>
       </div>
 
       {/* Swipe hints */}
-      <div className="mt-3 flex items-center justify-center gap-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-faint">
+      <div className="mt-2 flex shrink-0 items-center justify-center gap-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-faint">
         <span>‹ Swipe to pass</span>
         <span className="text-line">|</span>
         <span>Swipe to pik ›</span>
       </div>
 
       {/* Buttons */}
-      <div className="mt-3 flex gap-3">
+      <div className="mt-2 flex shrink-0 gap-3">
         <button
           type="button"
           onClick={() => commit(false)}
           disabled={disabled}
-          className="flex-1 rounded-none border border-accent bg-transparent py-3.5 text-sm font-semibold uppercase tracking-[0.12em] text-accent transition-colors hover:bg-accent hover:text-accent-ink disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex-1 rounded-none border border-accent bg-transparent py-3 text-sm font-semibold uppercase tracking-[0.12em] text-accent transition-colors hover:bg-accent hover:text-accent-ink disabled:cursor-not-allowed disabled:opacity-40"
         >
           ✕ Nope
         </button>
@@ -200,7 +200,7 @@ export default function VotingCard({
           type="button"
           onClick={() => commit(true)}
           disabled={disabled}
-          className="flex-1 rounded-none bg-ink py-3.5 text-sm font-semibold uppercase tracking-[0.12em] text-canvas transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex-1 rounded-none bg-ink py-3 text-sm font-semibold uppercase tracking-[0.12em] text-canvas transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
         >
           ✓ Pik it
         </button>

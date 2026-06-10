@@ -3,7 +3,6 @@ import { prisma } from '@/lib/prisma'
 import { getSessionToken } from '@/lib/session'
 import { resolveMemberUserId } from '@/lib/link'
 import { addPreference } from '@/lib/preferences'
-import { advanceQueueAtomic } from '@/lib/queue'
 
 export async function POST(
   request: Request,
@@ -59,35 +58,12 @@ export async function POST(
       })
     }
 
-    // "Skip the Reruns" behaviour: when the room's watchedFilter is ON, marking
-    // a movie seen removes it from the remaining queue for the WHOLE room,
-    // mid-session. In the shared veto queue that means advancing past it (only
-    // if it's the movie the room is currently on). When OFF, the seen-it flag is
-    // recorded only — the movie stays in the queue and votes proceed normally.
-    stage = 'skip-reruns-advance'
-    let removed = false
-    let advance: Awaited<ReturnType<typeof advanceQueueAtomic>> | null = null
-    if (room.watchedFilter) {
-      // Re-read live position/version (the room may have advanced while we parsed
-      // the body / wrote the watched row) so we only skip the card that's actually
-      // current and run the CAS advance against fresh values.
-      const fresh = await prisma.room.findUnique({
-        where: { id: room.id },
-        select: { currentPosition: true, queueVersion: true },
-      })
-      if (fresh) {
-        const currentEntry = await prisma.roomQueue.findFirst({
-          where: { roomId: room.id, position: fresh.currentPosition },
-          select: { tmdbMovieId: true },
-        })
-        if (currentEntry?.tmdbMovieId === tmdbMovieId) {
-          advance = await advanceQueueAtomic(room.id, fresh.currentPosition, fresh.queueVersion)
-          removed = advance.advanced
-        }
-      }
-    }
-
-    return NextResponse.json({ ok: true, removed, advance })
+    // "Skip the Reruns" removal is now handled by the per-member deck: the
+    // WatchedMovie row above is excluded from /queue (room-wide when watchedFilter
+    // is ON, otherwise just for this member), so a seen movie drops out of decks
+    // without advancing any shared position. When OFF, the seen flag is recorded
+    // only — the movie stays in the deck and votes proceed normally.
+    return NextResponse.json({ ok: true })
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err))
     console.error('[watched] fatal error', {

@@ -31,6 +31,11 @@ jest.mock('@/lib/prisma', () => {
     room: {
       findUnique: jest.fn(async ({ where }: { where: { code?: string; id?: string } }) =>
         rooms.find(r => (where.code ? r.code === where.code : r.id === where.id)) ?? null),
+      update: jest.fn(async ({ where, data }: { where: { id: string }; data: { queueVersion?: { increment: number } } }) => {
+        const r = rooms.find(x => x.id === where.id)!
+        if (data?.queueVersion?.increment) r.queueVersion = (r.queueVersion ?? 0) + data.queueVersion.increment
+        return r
+      }),
     },
     member: {
       create: jest.fn(async ({ data }: { data: { roomId: string; displayName: string; sessionToken: string; isHost: boolean } }) => {
