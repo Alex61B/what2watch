@@ -5,6 +5,7 @@ import { useRouter, useParams } from "next/navigation";
 import RoomCodeBar from "@/components/RoomCodeBar";
 import FilterControls from "@/components/FilterControls";
 import { ServiceId } from "@/lib/tmdb";
+import { track } from "@/lib/analytics";
 
 interface RoomFilters {
   genres?: number[];
@@ -224,6 +225,7 @@ export default function SetupPage() {
       if (patchingWatchedFilter) return;
       setPatchingWatchedFilter(true);
       setWatchedFilter(enabled);
+      track("feature_used", { feature: "skip_reruns", enabled }, { roomId: code });
       try {
         await fetch(`/api/rooms/${code}`, {
           method: "PATCH",
@@ -248,6 +250,7 @@ export default function SetupPage() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error ?? "Failed to start room.");
       }
+      track("room_started", undefined, { roomId: code });
       router.push(`/room/${code}/vote`);
     } catch (err) {
       setStartError(err instanceof Error ? err.message : "Failed to start.");
@@ -354,6 +357,7 @@ export default function SetupPage() {
             onDepthChange={(d) => {
               setDepth(d);
               persistFilters({ depth: d });
+              track("feature_used", { feature: "depth_change", depth: d }, { roomId: code });
             }}
             showServicesError={services.length === 0}
           />

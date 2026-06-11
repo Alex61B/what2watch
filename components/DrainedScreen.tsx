@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { track } from '@/lib/analytics'
 
 interface DrainedScreenProps {
   isHost: boolean
@@ -19,6 +20,7 @@ export default function DrainedScreen({ isHost, code }: DrainedScreenProps) {
     if (dealing) return
     setDealing(true)
     setMessage(null)
+    track('feature_used', { feature: 'requeue' }, { roomId: code })
     try {
       const res = await fetch(`/api/rooms/${code}/requeue`, { method: 'POST' })
       const data = await res.json().catch(() => ({}))

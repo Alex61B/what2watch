@@ -7,6 +7,7 @@ import { isValidRoomCode, generateRoomCode } from "@/lib/room-code";
 import AuthStatus from "@/components/AuthStatus";
 import BrandMark from "@/components/BrandMark";
 import BrandFooter from "@/components/BrandFooter";
+import { track } from "@/lib/analytics";
 
 const EYEBROW = "text-[11px] font-semibold uppercase tracking-[0.18em] text-faint";
 const FIELD =
@@ -87,6 +88,7 @@ export default function LandingPage() {
 
   async function copyLink() {
     if (!joinUrl) return;
+    track("feature_used", { feature: "share_link" }, { roomId: createCode ?? undefined });
     try {
       await navigator.clipboard.writeText(joinUrl);
       setLinkCopied(true);
@@ -100,6 +102,7 @@ export default function LandingPage() {
     if (!joinUrl) return;
     try {
       if (typeof navigator !== "undefined" && navigator.share) {
+        track("feature_used", { feature: "share_link" }, { roomId: createCode ?? undefined });
         await navigator.share({ title: "Join my movie night on PikFlix", url: joinUrl });
         return;
       }
@@ -128,6 +131,7 @@ export default function LandingPage() {
         throw new Error(data.error ?? "Failed to create room.");
       }
       const { code } = await res.json();
+      track("room_created", undefined, { roomId: code });
       router.push(`/room/${code}/setup`);
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : "Failed to create room.");
@@ -158,6 +162,7 @@ export default function LandingPage() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error ?? "Failed to join room.");
       }
+      track("room_joined", undefined, { roomId: code });
       router.push(`/room/${code}/lobby`);
     } catch (err) {
       setJoinError(err instanceof Error ? err.message : "Failed to join room.");

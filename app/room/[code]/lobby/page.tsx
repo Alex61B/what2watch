@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 import MemberList from "@/components/MemberList";
 import BrandMark from "@/components/BrandMark";
+import { track } from "@/lib/analytics";
 
 interface RoomMember {
   id: string;
@@ -137,6 +138,7 @@ export default function LobbyPage() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error ?? "Failed to join room.");
       }
+      track("room_joined", undefined, { roomId: code });
       const roomRes = await fetch(`/api/rooms/${code}`);
       if (roomRes.ok) {
         const data: RoomState = await roomRes.json();
@@ -165,6 +167,7 @@ export default function LobbyPage() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error ?? "Failed to start.");
       }
+      track("room_started", undefined, { roomId: code });
       router.push(`/room/${code}/vote`);
     } catch (err) {
       setStartError(err instanceof Error ? err.message : "Failed to start.");

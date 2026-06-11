@@ -8,6 +8,8 @@ import DrainedScreen from "@/components/DrainedScreen";
 import RoomCodeBar from "@/components/RoomCodeBar";
 import HostFilterEditor from "@/components/HostFilterEditor";
 import JoinRequestModal from "@/components/JoinRequestModal";
+import { startDwell, pauseDwell, resumeDwell, finalizeDwell, type DwellState } from "@/lib/dwell";
+import { track } from "@/lib/analytics";
 
 interface Movie {
   tmdbId: string;
@@ -82,6 +84,7 @@ export default function VotePage() {
   const stoppedRef = useRef(false);
   const lastVersionRef = useRef<number | null>(null);
   const submittingRef = useRef(false);
+  const dwellRef = useRef<DwellState | null>(null);
 
   useEffect(() => {
     submittingRef.current = submitting;
@@ -158,6 +161,27 @@ export default function VotePage() {
     return () => clearTimeout(id);
   }, [state, card, fetchCard]);
 
+  // Visibility-aware dwell timer for the current card → feeds card_decided. Restarts
+  // when the displayed movie changes; pauses while the tab is hidden so a backgrounded
+  // tab never inflates the dwell the recommender will train on.
+  const cardId = card?.tmdbId;
+  useEffect(() => {
+    if (!cardId) {
+      dwellRef.current = null;
+      return;
+    }
+    dwellRef.current = startDwell(Date.now(), document.visibilityState === "visible");
+    const onVis = () => {
+      if (!dwellRef.current) return;
+      dwellRef.current =
+        document.visibilityState === "hidden"
+          ? pauseDwell(dwellRef.current, Date.now())
+          : resumeDwell(dwellRef.current, Date.now());
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [cardId]);
+
   // Record the seen-it flag (without removing the movie) — used when "Skip the
   // Reruns" is OFF and the user has checked the box before voting.
   const recordSeen = useCallback(
@@ -181,6 +205,17 @@ export default function VotePage() {
       const tmdbMovieId = card.tmdbId;
       const wasSeen = seenMovieId === tmdbMovieId;
 
+      // Emit the dwell/decision signal for this card before it advances.
+      if (dwellRef.current) {
+        const { dwellMs, dwellCapped } = finalizeDwell(dwellRef.current, Date.now());
+        track(
+          "card_decided",
+          { movieId: tmdbMovieId, vote, dwellMs, ...(dwellCapped ? { dwellCapped: true } : {}) },
+          { roomId: code },
+        );
+        dwellRef.current = null;
+      }
+
       setSubmitting(true);
       const lockTimeout = setTimeout(() => setSubmitting(false), VOTE_LOCK_TIMEOUT_MS);
 
@@ -196,6 +231,7 @@ export default function VotePage() {
           if (res.ok) {
             const data = await res.json().catch(() => ({}));
             if (data.matched) {
+              track("room_matched", { movieId: tmdbMovieId }, { roomId: code });
               stoppedRef.current = true;
               router.replace(`/room/${code}/match`);
               return;

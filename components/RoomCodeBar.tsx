@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import BrandMark from '@/components/BrandMark'
+import { track } from '@/lib/analytics'
 
 interface RoomCodeBarProps {
   code: string
@@ -56,6 +57,7 @@ export default function RoomCodeBar({
   }
 
   async function copyLink() {
+    track('feature_used', { feature: 'share_link' }, { roomId: code })
     try {
       await navigator.clipboard.writeText(joinUrl)
       setLinkCopied(true)
@@ -68,6 +70,7 @@ export default function RoomCodeBar({
   async function share() {
     try {
       if (typeof navigator !== 'undefined' && navigator.share) {
+        track('feature_used', { feature: 'share_link' }, { roomId: code })
         await navigator.share({ title: 'Join my movie night on PikFlix', url: joinUrl })
         return
       }

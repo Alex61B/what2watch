@@ -196,3 +196,19 @@ model MovieCache {
   rating      Float
   updatedAt   DateTime @updatedAt
 }
+
+model Event {
+  id       String   @id @default(uuid())
+  type     String
+  anonId   String
+  userId   String?
+  memberId String?
+  roomId   String?
+  props    Json?
+  ts       DateTime @default(now())
+
+  @@index([type, ts])
+  @@index([roomId])
+  @@index([userId])
+  @@index([anonId])
+}

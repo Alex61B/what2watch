@@ -2,6 +2,57 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-10 — Event tracking pipeline (Phase 2b: funnel + feature emits)
+
+**Prompt (summary):** Wire the remaining client emits: room funnel (`room_created`/`room_joined`/
+`room_started`) and `feature_used` (`share_link`, `skip_reruns`, `depth_change`, `filter_edit`,
+`requeue`) across the landing, lobby, setup pages and the RoomCodeBar / HostFilterEditor /
+DrainedScreen components. (`friend_compare` intentionally dropped — covered by `page_view`.)
+
+**Approach:** One-line `track()` calls at each action's success/branch (link-share tracked once
+across the `copyLink`/`navigator.share` fallback). Remediation: my new emit in `DrainedScreen` made
+its component test surface a latent bug — `getAnonId` called `crypto.randomUUID()`, which throws in
+the jsdom env (and non-secure-context browsers); hardened `lib/analytics.ts` with a `randomUUID`
+fallback + a fully fire-and-forget `flush` that never throws.
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 204 Jest tests (31 suites). One
+remediation loop (the crypto.randomUUID bug), then green.
+
+## 2026-06-10 — Event tracking pipeline (Phase 2a: dwell signal)
+
+**Prompt (summary):** Build the recommender-critical dwell signal: a pure visibility-aware,
+ceiling-capped dwell accumulator wired into the vote page as `card_decided`, plus the
+`room_matched` funnel event and the analytics-queries doc. (Phase 2 split; 2b = remaining
+funnel + `feature_used` emits across ~8 client sites, next cycle.)
+
+**Approach:** New pure `lib/dwell.ts` (clock injected → unit-tested). Vote page (`app/room/[code]/
+vote/page.tsx`): a `dwellRef` started by an effect keyed on the current movie id, a
+`visibilitychange` listener for pause/resume, and `finalizeDwell` + `track('card_decided', …)`
+in `handleVote`; `track('room_matched', …)` in the existing match branch. `docs/analytics-queries.md`
+with example SQL. Prisma 6.19.3 restored after an accidental npx-driven 6→7 bump; `Event` migration
+committed.
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 204 Jest tests (31 suites; +4 dwell).
+One self-inflicted test-expectation error (idempotent-resume case) caught by the gate and fixed via
+the remediation loop (failures reset on pass).
+
+## 2026-06-10 — Event tracking pipeline (Phase 1: core)
+
+**Prompt (summary):** Implement Phase 1 of the approved event-tracking spec/plan
+(`docs/superpowers/{specs,plans}/2026-06-10-event-tracking-pipeline*`): a first-party `Event`
+table, an unauthenticated `POST /api/events` ingest, a client `track()`/`flush()` over
+`sendBeacon`, and `<AnalyticsTracker/>` (session_start + strict-mode-safe page_view). Approved
+amendments: `pikflix_` storage prefix, `clientTs`→`props._clientTs`, test-only rate-limit reset.
+
+**Approach:** Shared allowlist (`lib/analytics-events.ts`) imported by client + ingest. Pure,
+clock-injected rate limiter (`lib/rate-limit.ts`) with a `__resetRateLimit` test hook. Ingest is
+best-effort (drops bad input → 204; 429 only on rate limit; never 500s). `Event` model added to
+`schema.prisma` (no relations) and the Prisma client regenerated via `prisma generate` so it
+typechecks — the **DB migration is deferred to a gated step** (user approval required).
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 200 Jest tests (31 suites; +11:
+7 ingest, 4 rate-limit). DB migration NOT yet run.
+
 ## 2026-06-10 — Seed script for test profiles + sample data
 
 **Prompt (summary):** Create login-able profiles + sample data so multi-user flows (starting a room

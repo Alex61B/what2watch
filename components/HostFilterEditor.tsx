@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import FilterControls from '@/components/FilterControls'
 import { ServiceId } from '@/lib/tmdb'
+import { track } from '@/lib/analytics'
 
 interface RoomFilters {
   genres?: number[]
@@ -93,6 +94,7 @@ export default function HostFilterEditor({ code, open, onClose, onApplied }: Hos
         body: JSON.stringify({ streamingServices: services, filters, watchedFilter: skipReruns }),
       })
       if (!patch.ok) throw new Error('Failed to save filters.')
+      track('feature_used', { feature: 'filter_edit' }, { roomId: code })
 
       const requeue = await fetch(`/api/rooms/${code}/requeue`, { method: 'POST' })
       const data = await requeue.json().catch(() => ({}))

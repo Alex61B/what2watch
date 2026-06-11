@@ -4,6 +4,7 @@ import './globals.css'
 import SessionProviderWrapper from '@/components/SessionProviderWrapper'
 import ThemeProvider from '@/components/ThemeProvider'
 import ThemeToggle from '@/components/ThemeToggle'
+import AnalyticsTracker from '@/components/AnalyticsTracker'
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' })
 const playfair = Playfair_Display({
@@ -36,7 +37,10 @@ export default function RootLayout({
       <body className={`${inter.variable} ${playfair.variable} font-sans`}>
         <ThemeProvider>
           <ThemeToggle />
-          <SessionProviderWrapper>{children}</SessionProviderWrapper>
+          <SessionProviderWrapper>
+            <AnalyticsTracker />
+            {children}
+          </SessionProviderWrapper>
         </ThemeProvider>
       </body>
     </html>
