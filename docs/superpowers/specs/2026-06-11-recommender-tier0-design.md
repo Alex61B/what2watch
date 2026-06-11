@@ -176,3 +176,38 @@ All pure (no I/O), so unit-testable without a DB. `queue/route.ts` does the I/O 
 
 Tier-1 consensus/swipes-to-match ordering; TMDB `/recommendations` & `/similar` candidate generation;
 cross-session per-user personalization; any queue-mutation / persisted re-ordering; UI changes.
+
+## Future work (Tier-1+)
+
+Sketches only — each is its own brainstorm → spec → plan cycle, not a committed design. They build on
+the same read-time, fallback-safe, `pickedBy`-observable foundation as Tier-0.
+
+**Tier-1 — consensus / swipes-to-match ordering.** Tier-0 ranks by *what the room likes*; Tier-1 ranks
+by *what gets the room to a unanimous match in the fewest swipes*. Instead of (or alongside) the genre
+score, estimate each candidate's `P(all approved members vote YES)` and surface the highest-probability
+movies first — broadly-appealing titles (high `rating` × popularity × low genre-disagreement) early,
+polarizing ones later. Signal: the Tier-0 genre weights **plus a per-genre disagreement/variance term**
+(genres the room splits on get down-weighted) and a broad-appeal prior. Acceptance: in a vote-replay
+simulation over real `Event`/`Vote` history, measurably fewer cards-shown-to-match vs Tier-0, with no
+regression in match rate. Risk: don't over-optimize for speed at the cost of satisfaction — keep some
+exploration.
+
+**Tier-2 — TMDB candidate generation (`/recommendations` & `/similar`).** Changes candidate
+*generation*, not just ranking. Seed `GET /movie/{id}/recommendations` and `/similar` from the room's
+in-session YES votes, blend the results into the discover pool, and dedup against excluded/seen/queued.
+Hook: a candidate-merge step in `start` + `requeue` (or a background top-up when the eligible pool runs
+low) that appends fresh `RoomQueue` rows. Expands beyond `popularity.desc` discover toward titles
+*similar to what this room is actually enjoying*. Cost: extra TMDB calls (cache via `MovieCache`);
+needs a cap so the queue can't grow unbounded.
+
+**Tier-3 — per-user cross-session personalization.** For logged-in members, seed the signal from data
+already stored — `UserMoviePreference` (watchlist / seen) and their past-room `Vote` history — so a
+member's deck reflects their own taste, not just the current room. Blend personal taste with room
+consensus (the "Hybrid" option weighed in brainstorming), e.g. `score = α·roomScore + (1−α)·userScore`.
+Privacy: logged-in users only; anonymous members stay consensus-only; remains pseudonymous (no PII).
+
+**Cross-cutting.** Each tier should preserve: the cold-start fallback to lowest position, the
+`pickedBy` field + `[queue] picked` log (extend the log with each tier's inputs), the pure-module /
+read-time-I/O split (`lib/recommender.ts` stays pure; the route gathers data), and a vote-replay
+evaluation harness so tiers can be compared on real history rather than vibes. The dwell signal from
+the event pipeline is already available to all of them.
