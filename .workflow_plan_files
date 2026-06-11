@@ -1,4 +1,2 @@
-app/api/user/preferences/route.ts
-app/profile/settings/page.tsx
 components/SettingsClient.tsx
-__tests__/api/user-preferences.test.ts
+__tests__/components/SettingsClient.test.tsx

@@ -11,12 +11,25 @@ export default function SettingsClient({ email, initialName }: { email: string; 
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // True once we've loaded the saved services from the server. Until then we must NOT
+  // send savedServices on save — that would wipe them to [] before they loaded.
+  const [servicesKnown, setServicesKnown] = useState(false)
 
   useEffect(() => {
+    let active = true
     fetch('/api/user/preferences')
       .then(r => (r.ok ? r.json() : null))
-      .then(d => { if (d?.savedServices) setServices(d.savedServices as ServiceId[]) })
+      .then(d => {
+        if (!active) return
+        if (d && Array.isArray(d.savedServices)) {
+          setServices(d.savedServices as ServiceId[])
+          setServicesKnown(true)
+        }
+      })
       .catch(() => {})
+    return () => {
+      active = false
+    }
   }, [])
 
   async function handleSave() {
@@ -24,10 +37,16 @@ export default function SettingsClient({ email, initialName }: { email: string; 
     setSaved(false)
     setError(null)
     try {
+      // Only persist services once we've loaded them; otherwise omit the field so the
+      // route leaves the user's saved services untouched (no save-before-load wipe).
+      const payload: { displayName: string; savedServices?: ServiceId[] } = {
+        displayName: displayName.trim(),
+      }
+      if (servicesKnown) payload.savedServices = services
       const res = await fetch('/api/user/preferences', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ displayName: displayName.trim(), savedServices: services }),
+        body: JSON.stringify(payload),
       })
       if (res.ok) {
         setSaved(true)
