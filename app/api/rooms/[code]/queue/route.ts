@@ -2,6 +2,32 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getSessionToken } from '@/lib/session'
 import { getMovieById } from '@/lib/tmdb'
+import { buildRoomSignal, pickNext, scoreCandidate, type Candidate } from '@/lib/recommender'
+
+// card_decided events carry the room CODE (not id) and no memberId, so dwell aggregates per
+// (code, movieId) over YES events only (matches the YES-only dwell weighting). A miss → empty
+// map ⇒ votes-only weighting; it can never zero the signal.
+async function loadDwellByMovie(roomCode: string): Promise<Map<string, number>> {
+  const events = await prisma.event.findMany({
+    where: { roomId: roomCode, type: 'card_decided' },
+    select: { props: true },
+  })
+  const acc = new Map<string, { total: number; n: number }>()
+  for (const e of events) {
+    const p = e.props as { movieId?: unknown; vote?: unknown; dwellMs?: unknown } | null
+    if (!p || p.vote !== true) continue
+    const movieId = typeof p.movieId === 'string' ? p.movieId : null
+    const dwellMs = typeof p.dwellMs === 'number' ? p.dwellMs : null
+    if (!movieId || dwellMs === null) continue
+    const cur = acc.get(movieId) ?? { total: 0, n: 0 }
+    cur.total += dwellMs
+    cur.n += 1
+    acc.set(movieId, cur)
+  }
+  const avg = new Map<string, number>()
+  for (const [m, { total, n }] of acc) avg.set(m, total / n)
+  return avg
+}
 
 export async function GET(
   _request: Request,
@@ -65,25 +91,64 @@ export async function GET(
     }
 
     const excludedIds = [...new Set([...votedIds, ...rejectedIds, ...watchedIds])]
-    const notInClause = excludedIds.length ? excludedIds : ['__none__']
+    const excludedSet = new Set(excludedIds)
 
-    // The member's "current card" is the lowest-position room-queue entry they
-    // haven't voted on, that nobody has vetoed, and that isn't filtered as seen.
-    // Sourcing from RoomQueue (not MemberQueue) means each member advances
-    // independently and a host requeue (which appends to RoomQueue) is picked up.
-    stage = 'room-queue-find'
-    const nextEntry = await prisma.roomQueue.findFirst({
-      where: { roomId: room.id, tmdbMovieId: { notIn: notInClause } },
-      orderBy: { position: 'asc' },
+    // Re-rank: the member's next card is the highest group-consensus-scoring eligible entry
+    // (not simply the lowest position). Eligible = in the room queue, not voted on by this
+    // member, not vetoed room-wide, not filtered as seen. Falls back to lowest position on
+    // cold start / no signal. See lib/recommender.ts.
+    stage = 'room-queue-load'
+    const allQueue = await prisma.roomQueue.findMany({
+      where: { roomId: room.id },
+      select: {
+        tmdbMovieId: true,
+        position: true,
+        genreIds: true,
+        rating: true,
+        watchUrl: true,
+        streamingService: true,
+      },
     })
-
-    if (!nextEntry) {
+    const eligible = allQueue.filter((q) => !excludedSet.has(q.tmdbMovieId))
+    if (eligible.length === 0) {
       return NextResponse.json(null)
     }
 
-    stage = 'remaining-count'
-    const remaining = await prisma.roomQueue.count({
-      where: { roomId: room.id, tmdbMovieId: { notIn: notInClause } },
+    stage = 'signal'
+    const genreMap = new Map(allQueue.map((q) => [q.tmdbMovieId, q.genreIds]))
+    const roomVotes = await prisma.vote.findMany({
+      where: { roomId: room.id },
+      select: { tmdbMovieId: true, vote: true },
+    })
+    const dwellByMovie = await loadDwellByMovie(room.code)
+    const signal = buildRoomSignal(
+      roomVotes.map((v) => ({
+        genreIds: genreMap.get(v.tmdbMovieId) ?? [],
+        vote: v.vote,
+        dwellMs: dwellByMovie.get(v.tmdbMovieId),
+      })),
+    )
+
+    stage = 'rank'
+    const candidates: Candidate[] = eligible.map((q) => ({
+      tmdbMovieId: q.tmdbMovieId,
+      position: q.position,
+      genreIds: q.genreIds,
+      rating: q.rating,
+    }))
+    const chosen = pickNext(candidates, signal)
+    const pickedBy: 'score' | 'fallback' = chosen ? 'score' : 'fallback'
+    const chosenId =
+      chosen?.tmdbMovieId ?? eligible.reduce((a, b) => (b.position < a.position ? b : a)).tmdbMovieId
+    const nextEntry = eligible.find((q) => q.tmdbMovieId === chosenId)!
+    const remaining = eligible.length
+
+    console.log('[queue] picked', {
+      roomId: room.id,
+      pickedBy,
+      voteCount: signal.voteCount,
+      dwellMatches: dwellByMovie.size,
+      topScore: chosen ? Number(scoreCandidate(chosen, signal).toFixed(3)) : null,
     })
 
     stage = 'tmdb-fetch'
@@ -102,6 +167,7 @@ export async function GET(
     return NextResponse.json({
       movie: { ...movie, watchUrl: nextEntry.watchUrl, streamingService: nextEntry.streamingService },
       remaining,
+      pickedBy,
     })
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err))

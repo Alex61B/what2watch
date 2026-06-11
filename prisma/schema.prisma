@@ -101,6 +101,8 @@ model RoomQueue {
   position         Int
   streamingService String
   watchUrl         String
+  genreIds         Int[]  @default([])
+  rating           Float  @default(0)
   room             Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
 
   @@unique([roomId, tmdbMovieId])

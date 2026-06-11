@@ -2,6 +2,23 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-11 — Tier-0 recommender (cycle 2: schema + queue wiring)
+
+**Prompt (summary):** Wire the cycle-1 scorer into the live flow: persist movie features on
+`RoomQueue` and re-rank the next card by group-consensus score, with cold-start fallback and
+`pickedBy` observability. Migration left gated.
+
+**Approach:** Added `RoomQueue.genreIds Int[]` + `rating Float` (schema only; `prisma generate`'d via
+the local CLI — migration deferred/gated). Populated them in `start` + `requeue` from `discoverMovies`.
+`queue/route.ts`: load all queue entries (with features) → exclude voted/vetoed/watched in JS → build
+the room signal from all votes (dwell joined from `Event` by room **code**, YES only) → `pickNext` →
+fall back to lowest position; response gains `pickedBy` + a `[queue] picked` log (`voteCount`,
+`dwellMatches`, `topScore`). Reworked `queue-route.test.ts` (mock `findMany`/`event`, id-echoing
+`getMovieById`, exclusion-by-selection, warm/cold cases).
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + Jest (queue-route reworked + 2 new
+cases). DB migration NOT yet run (gated).
+
 ## 2026-06-11 — Tier-0 recommender (cycle 1: pure scorer)
 
 **Prompt (summary):** Build the in-session group-consensus re-ranker's algorithmic core: a pure

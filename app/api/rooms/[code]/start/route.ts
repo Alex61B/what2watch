@@ -88,6 +88,8 @@ export async function POST(
           position,
           streamingService: serviceIds[0],
           watchUrl: `https://www.themoviedb.org/movie/${movie.tmdbId}`,
+          genreIds: movie.genreIds,
+          rating: movie.rating,
         })),
         skipDuplicates: true,
       }),

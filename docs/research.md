@@ -1,50 +1,51 @@
-# Research — Tier-0 recommender (cycle 1: pure scorer)
+# Research — Tier-0 recommender (cycle 2: schema + persistence + queue wiring)
 
-Spec/plan: `docs/superpowers/{specs,plans}/2026-06-11-recommender-tier0*`. Branch
-`feat/recommender-tier0` off `feat/event-tracking-pipeline` (#14, for the dwell signal).
-
-The recommender is split into two serial cycles to keep each verifiable:
-- **Cycle 1 (this):** the pure `lib/recommender.ts` scorer + unit tests. No schema, no routes — it
-  has zero I/O coupling, so it lands and verifies on its own without breaking any existing route test.
-- **Cycle 2 (next):** `RoomQueue.genreIds`/`rating` schema + persistence at start/requeue + wiring the
-  scorer into `queue/route.ts` (with `pickedBy` + dwell-by-code join) + queue-route tests + the
-  **gated migration**.
+Spec/plan: `docs/superpowers/{specs,plans}/2026-06-11-recommender-tier0*`. Cycle 1 (pure
+`lib/recommender.ts` scorer) shipped + verified. This cycle wires it in. **The DB migration is
+deferred to a gated step** — code is written + `prisma generate`d so it typechecks; `migrate dev`
+runs only on explicit user approval (run with the local CLI).
 
 ## Requirements Summary
 
-Pure, in-session, group-consensus scorer: from the room's decided `(genres, vote, dwellMs?)` build an
-exposure-normalized genre-weight vector (YES weighted by dwell up to 2× over 8s; NO always −1), score
-each eligible candidate by its average genre weight + a small rating prior, and pick the argmax with a
-lowest-position tie-break. Returns `null` below 5 votes / empty eligible so the caller can fall back.
+- `RoomQueue` gains `genreIds Int[]` + `rating Float`, populated at build time in `start` + `requeue`
+  from `discoverMovies`.
+- `queue/route.ts` selects the next card by **highest group-consensus score** (via cycle-1
+  `pickNext`) instead of lowest position, falling back to lowest position on cold start / no signal.
+- Votes signal is read from `Vote` (by room id); dwell from `Event` `card_decided` (by room **code**,
+  YES only) — a key mismatch degrades to votes-only, never zeroes. Response gains `pickedBy` + a
+  `[queue] picked` log.
 
-## Stack Choices
+## Stack Choices / Environment Verification
 
-- A single pure module `lib/recommender.ts` (no Prisma, no I/O) so it's unit-testable without a DB —
-  matches the repo's Jest convention. Constants (`MIN_VOTES_TO_RANK`, `DWELL_REF_MS`,
-  `RATING_PRIOR_WEIGHT`, `RATING_BASELINE`) live there.
-- Exact math is fixed in the spec ("Scoring math (authoritative)").
-
-## Environment Verification
-
-- No new deps. The module is consumed later by `queue/route.ts` (cycle 2).
-- `verify.sh` green at the start of this branch (204 tests inherited from #14). The pure module +
-  tests are purely additive — no route or schema touched this cycle.
+- **Queue route block confirmed** (lines 68–105): replace `notInClause` + `roomQueue.findFirst` +
+  `roomQueue.count` with `roomQueue.findMany` (select incl. `genreIds`/`rating`) → JS exclude via
+  `excludedSet` → build signal (`vote.findMany` all + dwell-by-code) → `pickNext` → fallback. Keep the
+  exclusion computation, heartbeat, and TMDB fetch.
+- **`room.code`** is on the `findUnique` result (no select) → available for the dwell join.
+- **`start.test.ts` unaffected** — it reads only `position`/`tmdbMovieId` from `roomQueue.createMany`
+  data; extra fields are ignored. Not in the manifest.
+- **`queue-route.test.ts` reworked**: mock `roomQueue.findMany` + `event.findMany` (drop
+  `findFirst`/`count`); `getMovieById` echoes the id so the chosen card is assertable; exclusion is
+  verified by which candidate is chosen; add warm (`pickedBy:score`) + cold (`pickedBy:fallback`) cases.
+- `prisma generate` (safe, no DB) makes `genreIds`/`rating` typecheck before the gated migration.
 
 ## Risks & Edge Cases
 
-- Exposure normalization (frequent genre can't dominate), YES-only dwell, NO=−1, unseen genre ⇒ 0,
-  `|genres|=0` ⇒ genreScore 0, unknown rating (≤0) ⇒ no prior, `voteCount<5` ⇒ null, lowest-position
-  tie-break — all covered by unit tests.
-- Floating-point score equality only matters for exact ties (e.g., all-zero) → deterministic
-  position tie-break.
+- **Migration deferred/gated** — schema edited + generated this cycle; `migrate dev` is the gated
+  follow-up (local CLI per `reference-prisma-migrate-local-cli`; drift recovery is user-run).
+- **Dwell key** is room **code** (not id); miss ⇒ votes-only weighting (never zeroed); `dwellMatches`
+  logged for observability.
+- **No behavior change for existing/pre-migration rooms** (genreIds=[], rating=0 ⇒ score 0 ⇒
+  position tie-break) and **cold rooms** (<5 votes ⇒ fallback) — both byte-for-byte today's order.
+- `vote.findMany` is now called three times (member votes, rejects, all-for-signal) — the test mock
+  differentiates by `where` (memberId / vote:false / roomId-only).
 
 ## Assumptions & Open Questions
 
-- Dwell magnitude is supplied by the caller (cycle 2 reads it from `Event` by room code); the pure
-  module just takes optional `dwellMs`. No blocking questions.
+- `pickedBy` added to the `/queue` JSON is ignored by the vote page (no UI change). No blocking questions.
 
-## Out of Scope (this cycle)
+## Out of Scope
 
-- Schema/migration, feature persistence, queue-route wiring, `pickedBy`, the dwell join — all cycle 2.
+- Running the migration (gated); UI changes; Tier-1+ ranking; TMDB recommendation candidate generation.
 
 ## Readiness Verdict: READY FOR PLANNING
