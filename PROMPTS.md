@@ -2,6 +2,21 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-11 — Tier-0 recommender (cycle 1: pure scorer)
+
+**Prompt (summary):** Build the in-session group-consensus re-ranker's algorithmic core: a pure
+`lib/recommender.ts` that turns the room's `(genres, vote, dwellMs?)` decisions into an
+exposure-normalized genre-weight vector and scores/ranks eligible candidates. Spec/plan in
+`docs/superpowers/{specs,plans}/2026-06-11-recommender-tier0*`.
+
+**Approach:** `buildRoomSignal` (YES → 1–2× by dwell over 8s, NO → −1, normalize by exposure),
+`scoreCandidate` (avg genre weight over candidate genres + 0.1·(rating−6) prior, unknown rating
+neutral), `pickNext` (argmax, lowest-position tie-break, null below 5 votes / empty ⇒ caller falls
+back). No I/O — pure + unit-tested. Cycle 2 will add the `RoomQueue.genreIds/rating` schema +
+persistence + `queue/route.ts` wiring (dwell-by-code join, `pickedBy`) + the gated migration.
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + Jest (added 12 recommender cases).
+
 ## 2026-06-10 — Event tracking pipeline (Phase 2b: funnel + feature emits)
 
 **Prompt (summary):** Wire the remaining client emits: room funnel (`room_created`/`room_joined`/

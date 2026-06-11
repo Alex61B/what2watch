@@ -1,7 +1,2 @@
-app/page.tsx
-app/room/[code]/setup/page.tsx
-app/room/[code]/lobby/page.tsx
-components/RoomCodeBar.tsx
-components/HostFilterEditor.tsx
-components/DrainedScreen.tsx
-lib/analytics.ts
+lib/recommender.ts
+__tests__/lib/recommender.test.ts

@@ -1,55 +1,50 @@
-# Research — Event tracking pipeline (Phase 2b: funnel + feature emits)
+# Research — Tier-0 recommender (cycle 1: pure scorer)
 
-Spec/plan: `docs/superpowers/{specs,plans}/2026-06-10-event-tracking-pipeline*`. Phases 1 + 2a
-shipped (core pipeline + dwell signal). This cycle adds the remaining client-side emits.
+Spec/plan: `docs/superpowers/{specs,plans}/2026-06-11-recommender-tier0*`. Branch
+`feat/recommender-tier0` off `feat/event-tracking-pipeline` (#14, for the dwell signal).
+
+The recommender is split into two serial cycles to keep each verifiable:
+- **Cycle 1 (this):** the pure `lib/recommender.ts` scorer + unit tests. No schema, no routes — it
+  has zero I/O coupling, so it lands and verifies on its own without breaking any existing route test.
+- **Cycle 2 (next):** `RoomQueue.genreIds`/`rating` schema + persistence at start/requeue + wiring the
+  scorer into `queue/route.ts` (with `pickedBy` + dwell-by-code join) + queue-route tests + the
+  **gated migration**.
 
 ## Requirements Summary
 
-Add `track()` calls at the client action sites for the room funnel and feature usage, using the
-Phase 1 client + allowlist. One-liners, additive, no behavior change.
-
-| Event | Site |
-|---|---|
-| `room_created` | `app/page.tsx` `handleCreateRoom` (create success) |
-| `room_joined` | `app/page.tsx` `handleJoinRoom` + `app/room/[code]/lobby/page.tsx` `handleJoin` |
-| `room_started` | `app/room/[code]/setup/page.tsx` `handleStart` + `lobby/page.tsx` `handleStart` |
-| `feature_used: share_link` | `app/page.tsx` + `components/RoomCodeBar.tsx` (copyLink/share) |
-| `feature_used: skip_reruns` | `setup/page.tsx` `patchWatchedFilter` |
-| `feature_used: depth_change` | `setup/page.tsx` `onDepthChange` |
-| `feature_used: filter_edit` | `components/HostFilterEditor.tsx` `handleApply` (after PATCH ok) |
-| `feature_used: requeue` | `components/DrainedScreen.tsx` `dealMore` |
-
-`room_matched` already shipped in 2a.
+Pure, in-session, group-consensus scorer: from the room's decided `(genres, vote, dwellMs?)` build an
+exposure-normalized genre-weight vector (YES weighted by dwell up to 2× over 8s; NO always −1), score
+each eligible candidate by its average genre weight + a small rating prior, and pick the argmax with a
+lowest-position tie-break. Returns `null` below 5 votes / empty eligible so the caller can fall back.
 
 ## Stack Choices
 
-- Reuse `track()` from `lib/analytics.ts` and the `FEATURES`/`EVENT_TYPES` allowlist from
-  `lib/analytics-events.ts`. No new modules, no new tests (thin call-site wiring).
-- `share` handlers that fall back to `copyLink` emit only once: `copyLink` always tracks; `share`
-  tracks only in its `navigator.share` branch.
+- A single pure module `lib/recommender.ts` (no Prisma, no I/O) so it's unit-testable without a DB —
+  matches the repo's Jest convention. Constants (`MIN_VOTES_TO_RANK`, `DWELL_REF_MS`,
+  `RATING_PRIOR_WEIGHT`, `RATING_BASELINE`) live there.
+- Exact math is fixed in the spec ("Scoring math (authoritative)").
 
 ## Environment Verification
 
-- Exact handler anchors read for all 6 files (create/join/start success points; the
-  `patchWatchedFilter`, `onDepthChange`, `handleApply`, `dealMore`, `copyLink`/`share` bodies).
-- All target files are `'use client'` components — `track()` runs client-side and no-ops on SSR.
+- No new deps. The module is consumed later by `queue/route.ts` (cycle 2).
+- `verify.sh` green at the start of this branch (204 tests inherited from #14). The pure module +
+  tests are purely additive — no route or schema touched this cycle.
 
 ## Risks & Edge Cases
 
-- **Double-count on share fallback** — avoided by tracking link-share in `copyLink` + only the
-  `navigator.share` branch of `share`.
-- **No behavior change** — emits are fire-and-forget, added after the relevant success/branch.
-- **Lint** — `track` imported and used in each file; inline `onDepthChange` gains a third statement.
+- Exposure normalization (frequent genre can't dominate), YES-only dwell, NO=−1, unseen genre ⇒ 0,
+  `|genres|=0` ⇒ genreScore 0, unknown rating (≤0) ⇒ no prior, `voteCount<5` ⇒ null, lowest-position
+  tie-break — all covered by unit tests.
+- Floating-point score equality only matters for exact ties (e.g., all-zero) → deterministic
+  position tie-break.
 
 ## Assumptions & Open Questions
 
-- `roomId` at the client layer is the room **code** (what the client holds) — acceptable; the
-  Event table stores it as a string. No blocking questions.
+- Dwell magnitude is supplied by the caller (cycle 2 reads it from `Event` by room code); the pure
+  module just takes optional `dwellMs`. No blocking questions.
 
-## Out of Scope
+## Out of Scope (this cycle)
 
-- **`friend_compare`** intentionally dropped: visiting `/profile/friends/[id]` is already captured
-  by `page_view`, so a separate event would be redundant.
-- Recommender logic, dashboards, retention cron.
+- Schema/migration, feature persistence, queue-route wiring, `pickedBy`, the dwell join — all cycle 2.
 
 ## Readiness Verdict: READY FOR PLANNING
