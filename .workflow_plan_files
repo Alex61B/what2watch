@@ -1,9 +1,3 @@
-prisma/schema.prisma
-lib/analytics-events.ts
-lib/rate-limit.ts
-lib/analytics.ts
-app/api/events/route.ts
-components/AnalyticsTracker.tsx
-app/layout.tsx
-__tests__/lib/rate-limit.test.ts
-__tests__/api/events.test.ts
+lib/dwell.ts
+__tests__/lib/dwell.test.ts
+app/room/[code]/vote/page.tsx

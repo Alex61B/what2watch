@@ -2,6 +2,24 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-10 — Event tracking pipeline (Phase 2a: dwell signal)
+
+**Prompt (summary):** Build the recommender-critical dwell signal: a pure visibility-aware,
+ceiling-capped dwell accumulator wired into the vote page as `card_decided`, plus the
+`room_matched` funnel event and the analytics-queries doc. (Phase 2 split; 2b = remaining
+funnel + `feature_used` emits across ~8 client sites, next cycle.)
+
+**Approach:** New pure `lib/dwell.ts` (clock injected → unit-tested). Vote page (`app/room/[code]/
+vote/page.tsx`): a `dwellRef` started by an effect keyed on the current movie id, a
+`visibilitychange` listener for pause/resume, and `finalizeDwell` + `track('card_decided', …)`
+in `handleVote`; `track('room_matched', …)` in the existing match branch. `docs/analytics-queries.md`
+with example SQL. Prisma 6.19.3 restored after an accidental npx-driven 6→7 bump; `Event` migration
+committed.
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 204 Jest tests (31 suites; +4 dwell).
+One self-inflicted test-expectation error (idempotent-resume case) caught by the gate and fixed via
+the remediation loop (failures reset on pass).
+
 ## 2026-06-10 — Event tracking pipeline (Phase 1: core)
 
 **Prompt (summary):** Implement Phase 1 of the approved event-tracking spec/plan

@@ -1,65 +1,54 @@
-# Research — Event tracking pipeline (Phase 1)
+# Research — Event tracking pipeline (Phase 2a: dwell signal)
 
-Full design + task plan already exist:
-- Spec: `docs/superpowers/specs/2026-06-10-event-tracking-pipeline-design.md`
-- Plan: `docs/superpowers/plans/2026-06-10-event-tracking-pipeline.md`
+Spec/plan: `docs/superpowers/{specs,plans}/2026-06-10-event-tracking-pipeline*`.
+Phase 1 (core pipeline: Event table + ingest + client track + AnalyticsTracker) shipped and
+verified; migration applied on Prisma 6.19.3 (an accidental npx 6→7 bump was reverted).
 
-This RESEARCH doc covers the **Phase 1 (pipeline core)** cycle being implemented now.
+Phase 2 is split to keep each cycle small and reviewable:
+- **2a (this cycle):** the recommender-critical **dwell signal** — `lib/dwell.ts` + wiring
+  `card_decided` (with visibility-aware, ceiling-capped dwell) into the vote page, plus the
+  `room_matched` funnel event (already in that file) and the `docs/analytics-queries.md` doc.
+- **2b (next cycle):** the remaining funnel (`room_created/joined/started`) and `feature_used`
+  emits across `app/page.tsx`, lobby/setup pages, `RoomCodeBar`, `DrainedScreen`,
+  `HostFilterEditor`, and the friends pages (~8 client sites; simple one-liners each).
 
 ## Requirements Summary
 
-Ship the durable, first-party behavioral event pipeline's core: a Postgres `Event` table,
-an unauthenticated `POST /api/events` ingest (validate against a shared allowlist, in-memory
-rate-limit, stamp `userId`/`ts`, `createMany`), a client `track()`/`flush()` over `sendBeacon`,
-and a mounted `<AnalyticsTracker/>` emitting `session_start` + a strict-mode-safe `page_view`.
-Pseudonymous (logged-in `userId` + client `anonId`); no PII. Approved amendments: `pikflix_`
-storage prefix, `clientTs` → `props._clientTs`, test-only rate-limiter reset.
-
-Phase 2 (dwell on the vote page, `feature_used`/funnel emits, queries doc) is a separate cycle.
+Capture clean per-slide attention time as `card_decided { movieId, vote, dwellMs, dwellCapped? }`
+— the implicit-feedback signal for the future recommender. Dwell counts only visible, current-card
+time (pause on tab hide) and is hard-capped at 60s. Emit `room_matched` when a vote produces a match.
 
 ## Stack Choices
 
-- **Prisma `Event` model**, no relations (analytics must survive user/room deletion; `User` untouched).
-- **`navigator.sendBeacon`** + `fetch(keepalive)` fallback for non-blocking sends.
-- **Shared allowlist module** (`lib/analytics-events.ts`) imported by client and the ingest validator.
-- **Pure, clock-injected helpers** for the rate limiter (`lib/rate-limit.ts`) so they're unit-testable
-  with mocked time, matching the repo's Jest-mocks-Prisma convention.
-- **Mount point:** `<AnalyticsTracker/>` inside `SessionProviderWrapper` in `app/layout.tsx`
-  (confirmed existing wrapper); `useSearchParams` wrapped in `<Suspense>` (matches `signin/page.tsx`).
+- **Pure `lib/dwell.ts`** (clock injected) so the accumulator is unit-tested without a DOM.
+- Wire into `app/room/[code]/vote/page.tsx`: a `dwellRef` started by an effect keyed on the
+  current movie id, a `visibilitychange` listener for pause/resume, and `finalizeDwell` + `track`
+  in the existing `handleVote`. `room_matched` goes in the existing `data.matched` branch.
+- Reuse the `track()` client from Phase 1; no new infra.
 
 ## Environment Verification
 
-- `app/layout.tsx` has `SessionProviderWrapper` (mount point) and an existing `w2w_theme` key
-  (out of scope — not renamed).
-- No existing `Event` model, `/api/events` route, or tracking code (greenfield).
-- `DIRECT_URL` present in `.env.local` → the gated `prisma migrate dev` will run when approved.
-- Schema edit needs `npx prisma generate` (safe, no DB write) so `prisma.event` typechecks before
-  the migration is run. Tests mock Prisma, so they pass without the table existing.
+- Vote page read: `card.tmdbId` is the current movie; `handleVote(vote)` is the single decision
+  point; line ~198 `data.matched` is the match branch; `code` is the room code. All present.
+- `lib/analytics.ts`, `lib/analytics-events.ts` (with `DWELL_CEILING_MS`) from Phase 1 are in place.
+- `verify.sh` green at Phase 1 close (200 tests); Prisma back on 6.19.3.
 
 ## Risks & Edge Cases
 
-- **Migration is gated** — `prisma migrate dev` is restricted; it runs only on explicit user
-  approval (asked at the migration step). Generated migration SQL trips `.workflow_drift`; recovery
-  is `advance_state.sh drift-to-plan` (user-run) per `feedback-workflow-drift-recovery`. To keep this
-  cycle clean, the migration is deferred: schema is edited + `prisma generate`d now; the DB migration
-  is a separate gated step.
-- **In-memory rate limit is per serverless instance** (not global) — documented; Redis is the upgrade.
-- **Best-effort ingest** must never 500 the client: malformed body / unknown types / oversized props
-  are dropped, returning `204`; `429` only on rate limit.
-- **`page_view` double-fire** under React strict mode (dev) — mitigated by a `lastUrl` ref dedupe.
-- **SSR safety** — client analytics guard on `typeof window`; no-op on the server.
+- **Backgrounded tab must not inflate dwell** — visibility-aware accumulation + 60s ceiling+flag.
+- **exhaustive-deps lint** — the dwell effect keys on a derived `cardId` (not the `card` object) so
+  it restarts only when the movie changes and satisfies the hook lint rule.
+- **No behavior change** — instrumentation is additive; voting/advance logic untouched.
+- Dwell helper is pure → fully unit-tested (visible-only accrual, pause/resume idempotence, cap+flag).
 
 ## Assumptions & Open Questions
 
-- `anonId` is client-generated and trusted (pseudonymous product analytics; spoofing not a threat).
-- `clientTs` is advisory only (ordering within a batch); server `ts` is authoritative.
-- No blocking open questions. Migration timing is the one user gate.
+- One `card_decided` per swipe (no separate skip action — confirmed from the vote page).
+- `dwellCapped` only set when raw dwell exceeds the ceiling. No blocking questions.
 
 ## Out of Scope
 
-- Phase 2 instrumentation (dwell/vote page, feature/funnel emits, queries doc) — next cycle.
-- Third-party analytics, dashboards, automated retention cron, server-minted identity cookie,
-  batched/offline client buffer.
-- Renaming `w2w_theme` or the `w2w_session_<CODE>` room cookie.
+- 2b funnel + `feature_used` emits (next cycle).
+- Recommender logic; dashboards; retention cron.
 
 ## Readiness Verdict: READY FOR PLANNING
