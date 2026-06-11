@@ -1,5 +1,4 @@
-prisma/schema.prisma
-app/api/rooms/[code]/start/route.ts
-app/api/rooms/[code]/requeue/route.ts
-app/api/rooms/[code]/queue/route.ts
-__tests__/api/queue-route.test.ts
+app/api/user/preferences/route.ts
+app/profile/settings/page.tsx
+components/SettingsClient.tsx
+__tests__/api/user-preferences.test.ts
