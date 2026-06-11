@@ -2,6 +2,23 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-11 — Fix: Profile/Settings breaks for a stale session
+
+**Prompt (summary):** "Profile / Settings Info sometimes results in a bug or error." Figure out why and fix.
+
+**Root cause (reproduced):** the Settings flow assumed the session's user still exists. A valid JWT can
+outlive its `User` row (deleted account / dev DB reset). Then `/profile/settings` rendered blank info
+(`user?.email ?? ''`) — the "bug" — and Save (`PUT /api/user/preferences`) threw an unhandled
+`prisma` `P2025` → **500** — the "error". Confirmed by deleting a throwaway user mid-session.
+
+**Fix (defense-in-depth, one root cause, three layers):** PUT uses `updateMany` (no P2025 throw) →
+`count === 0` ⇒ `401`; the settings page `redirect('/auth/signin')` when the user row is gone;
+`SettingsClient` surfaces failures (redirect on 401, show the error otherwise) instead of failing
+silently. New `__tests__/api/user-preferences.test.ts` (TDD — stale-session case was red, now green).
+
+**Verification:** `scripts/verify.sh` green (7 new preference tests). Live re-run: stale `/profile/settings`
+→ 307 → `/auth/signin` (was 200 blank); stale Save → 401 (was 500). Seed data restored, test users removed.
+
 ## 2026-06-11 — Tier-0 recommender (cycle 2: schema + queue wiring)
 
 **Prompt (summary):** Wire the cycle-1 scorer into the live flow: persist movie features on

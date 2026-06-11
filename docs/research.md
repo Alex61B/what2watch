@@ -1,51 +1,54 @@
-# Research — Tier-0 recommender (cycle 2: schema + persistence + queue wiring)
-
-Spec/plan: `docs/superpowers/{specs,plans}/2026-06-11-recommender-tier0*`. Cycle 1 (pure
-`lib/recommender.ts` scorer) shipped + verified. This cycle wires it in. **The DB migration is
-deferred to a gated step** — code is written + `prisma generate`d so it typechecks; `migrate dev`
-runs only on explicit user approval (run with the local CLI).
+# Research — Fix: Profile/Settings breaks for a stale session (deleted/missing user)
 
 ## Requirements Summary
 
-- `RoomQueue` gains `genreIds Int[]` + `rating Float`, populated at build time in `start` + `requeue`
-  from `discoverMovies`.
-- `queue/route.ts` selects the next card by **highest group-consensus score** (via cycle-1
-  `pickNext`) instead of lowest position, falling back to lowest position on cold start / no signal.
-- Votes signal is read from `Vote` (by room id); dwell from `Event` `card_decided` (by room **code**,
-  YES only) — a key mismatch degrades to votes-only, never zeroes. Response gains `pickedBy` + a
-  `[queue] picked` log.
+"Profile / Settings Info sometimes results in a bug or error." Root-caused via reproduction:
+**the Settings flow assumes the session's user still exists in the DB.** When a valid JWT session
+outlives its `User` row (account deleted, or — common in dev — a DB reset/reseed while logged in),
+the Settings page renders blank info ("bug") and Save returns a 500 ("error"). Make it robust.
 
-## Stack Choices / Environment Verification
+## Reproduction (evidence)
 
-- **Queue route block confirmed** (lines 68–105): replace `notInClause` + `roomQueue.findFirst` +
-  `roomQueue.count` with `roomQueue.findMany` (select incl. `genreIds`/`rating`) → JS exclude via
-  `excludedSet` → build signal (`vote.findMany` all + dwell-by-code) → `pickNext` → fallback. Keep the
-  exclusion computation, heartbeat, and TMDB fetch.
-- **`room.code`** is on the `findUnique` result (no select) → available for the dwell join.
-- **`start.test.ts` unaffected** — it reads only `position`/`tmdbMovieId` from `roomQueue.createMany`
-  data; extra fields are ignored. Not in the manifest.
-- **`queue-route.test.ts` reworked**: mock `roomQueue.findMany` + `event.findMany` (drop
-  `findFirst`/`count`); `getMovieById` echoes the id so the chosen card is assertable; exclusion is
-  verified by which candidate is chosen; add warm (`pickedBy:score`) + cold (`pickedBy:fallback`) cases.
-- `prisma generate` (safe, no DB) makes `genreIds`/`rating` typecheck before the gated migration.
+Logged in as a throwaway user, then deleted the `User` row mid-session (JWT stays valid):
+- `GET /profile/settings` → **200 but blank** (`user?.email ?? ''` hides the missing user).
+- `GET /api/user/preferences` → 404 (callers handle it).
+- `PUT /api/user/preferences` (Save) → **500** — `prisma.user.update` throws **P2025** and the route
+  has **no try/catch** (confirmed `PrismaClientKnownRequestError code: 'P2025'` in the server log).
+- Direct DB checks: `update` with empty `data` does **not** throw; `update` on a missing id throws P2025.
+- Happy path (existing user): settings page / GET / PUT all 200; empty name → 400 (silently swallowed by the UI).
+
+## Stack Choices
+
+- **`PUT`**: switch `prisma.user.update` → `prisma.user.updateMany` (returns `{count}`, never throws
+  P2025); `count === 0` ⇒ stale session ⇒ `401`. No exception-as-control-flow.
+- **Settings page**: `redirect('/auth/signin')` (next/navigation) when the user row is null — matches
+  `ProfileGuard.requireUserId`'s existing redirect-on-no-session pattern.
+- **`SettingsClient`**: add an `error` state; on save, `401` ⇒ `window.location.href='/auth/signin'`,
+  other non-OK ⇒ show the server's error message. Reuses the existing styling.
+- **Test**: new `__tests__/api/user-preferences.test.ts` (Prisma + auth mocked, repo convention).
+
+## Environment Verification
+
+- Reproduced on a fresh dev server (`:3100`) with seed users; `P2025` confirmed in logs.
+- No schema change → no migration. (NOTE: the repro mutated `alice`'s name/services and deleted a
+  throwaway user — restore via `npm run db:seed` (upsert) in cleanup.)
 
 ## Risks & Edge Cases
 
-- **Migration deferred/gated** — schema edited + generated this cycle; `migrate dev` is the gated
-  follow-up (local CLI per `reference-prisma-migrate-local-cli`; drift recovery is user-run).
-- **Dwell key** is room **code** (not id); miss ⇒ votes-only weighting (never zeroed); `dwellMatches`
-  logged for observability.
-- **No behavior change for existing/pre-migration rooms** (genreIds=[], rating=0 ⇒ score 0 ⇒
-  position tie-break) and **cold rooms** (<5 votes ⇒ fallback) — both byte-for-byte today's order.
-- `vote.findMany` is now called three times (member votes, rejects, all-for-signal) — the test mock
-  differentiates by `where` (memberId / vote:false / roomId-only).
+- `updateMany` with empty `data` + existing user → `count 1` ⇒ ok (no-op) — unchanged behavior;
+  SettingsClient always sends a valid body anyway.
+- The page redirect uses `redirect()` which throws `NEXT_REDIRECT` (handled by Next) and narrows
+  `user` to non-null afterward.
+- Defense-in-depth: same root cause (missing user) handled at page, API, and client layers.
 
 ## Assumptions & Open Questions
 
-- `pickedBy` added to the `/queue` JSON is ignored by the vote page (no UI change). No blocking questions.
+- Treat a stale session (account gone) as `401` ⇒ re-authenticate. No blocking questions.
 
 ## Out of Scope
 
-- Running the migration (gated); UI changes; Tier-1+ ranking; TMDB recommendation candidate generation.
+- The save-before-load race in `SettingsClient` (services could be saved as `[]` if Save is clicked
+  before the GET populates them) — real but separate; not the reported symptom. Noted for later.
+- Broad resilience to transient DB errors across all routes.
 
 ## Readiness Verdict: READY FOR PLANNING

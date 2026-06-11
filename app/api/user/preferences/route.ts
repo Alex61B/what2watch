@@ -53,6 +53,12 @@ export async function PUT(request: Request) {
     data.savedServices = body.savedServices
   }
 
-  await prisma.user.update({ where: { id: session.user.id }, data })
+  // updateMany never throws P2025 when the row is gone (a valid JWT can outlive its
+  // user row after a deleted account / dev DB reset); count === 0 means the session
+  // outlived its user — return 401 so the client re-authenticates instead of 500ing.
+  const { count } = await prisma.user.updateMany({ where: { id: session.user.id }, data })
+  if (count === 0) {
+    return NextResponse.json({ error: 'Account not found — please sign in again' }, { status: 401 })
+  }
   return NextResponse.json({ ok: true })
 }

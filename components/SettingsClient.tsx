@@ -10,6 +10,7 @@ export default function SettingsClient({ email, initialName }: { email: string; 
   const [services, setServices] = useState<ServiceId[]>([])
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/user/preferences')
@@ -21,13 +22,24 @@ export default function SettingsClient({ email, initialName }: { email: string; 
   async function handleSave() {
     setSaving(true)
     setSaved(false)
+    setError(null)
     try {
       const res = await fetch('/api/user/preferences', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ displayName: displayName.trim(), savedServices: services }),
       })
-      if (res.ok) setSaved(true)
+      if (res.ok) {
+        setSaved(true)
+      } else if (res.status === 401) {
+        // Stale session (the account no longer exists) — re-authenticate.
+        window.location.href = '/auth/signin'
+      } else {
+        const d = await res.json().catch(() => ({}))
+        setError(d?.error ?? 'Could not save your settings. Please try again.')
+      }
+    } catch {
+      setError('Could not save your settings. Please try again.')
     } finally {
       setSaving(false)
     }
@@ -61,6 +73,7 @@ export default function SettingsClient({ email, initialName }: { email: string; 
         {saving ? 'Saving…' : 'Save'}
       </button>
       {saved && <p className="text-sm text-emerald-400">Saved.</p>}
+      {error && <p className="text-sm text-red-400">{error}</p>}
     </div>
   )
 }
