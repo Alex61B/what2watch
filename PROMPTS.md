@@ -2,6 +2,21 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-11 — Fix: SettingsClient save-before-load race wiped services
+
+**Prompt (summary):** Follow-up to #18 — fix the race where saving Settings before the prefs GET
+resolves persists an empty services list, wiping the user's saved streaming services.
+
+**Root cause:** `services` inits to `[]` and loads async; `handleSave` unconditionally sent
+`savedServices`, so an early save wrote `[]`.
+
+**Fix:** add a `servicesKnown` flag (true only after a successful load) and include `savedServices`
+in the PUT body **only when known** — otherwise omit it so the route leaves services untouched.
+Guarded the GET effect with an `active` cleanup flag. New `__tests__/components/SettingsClient.test.tsx`
+(TDD; jsdom + mocked `global.fetch`): the no-wipe case was red, now green.
+
+**Verification:** `scripts/verify.sh` green (2 new component tests).
+
 ## 2026-06-11 — Fix: Profile/Settings breaks for a stale session
 
 **Prompt (summary):** "Profile / Settings Info sometimes results in a bug or error." Figure out why and fix.

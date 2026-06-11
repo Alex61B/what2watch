@@ -1,54 +1,51 @@
-# Research — Fix: Profile/Settings breaks for a stale session (deleted/missing user)
+# Research — Fix: SettingsClient save-before-load race wipes saved services
 
 ## Requirements Summary
 
-"Profile / Settings Info sometimes results in a bug or error." Root-caused via reproduction:
-**the Settings flow assumes the session's user still exists in the DB.** When a valid JWT session
-outlives its `User` row (account deleted, or — common in dev — a DB reset/reseed while logged in),
-the Settings page renders blank info ("bug") and Save returns a 500 ("error"). Make it robust.
+Follow-up to the stale-session fix (#18). `SettingsClient` has a race: `services` initializes to `[]`
+and is populated by an async `GET /api/user/preferences`; `handleSave` **unconditionally** sends
+`savedServices`. Clicking **Save before the GET resolves** persists `[]`, wiping the user's saved
+streaming services. Fix so a save can never wipe services it hasn't loaded yet.
 
-## Reproduction (evidence)
+## Root Cause
 
-Logged in as a throwaway user, then deleted the `User` row mid-session (JWT stays valid):
-- `GET /profile/settings` → **200 but blank** (`user?.email ?? ''` hides the missing user).
-- `GET /api/user/preferences` → 404 (callers handle it).
-- `PUT /api/user/preferences` (Save) → **500** — `prisma.user.update` throws **P2025** and the route
-  has **no try/catch** (confirmed `PrismaClientKnownRequestError code: 'P2025'` in the server log).
-- Direct DB checks: `update` with empty `data` does **not** throw; `update` on a missing id throws P2025.
-- Happy path (existing user): settings page / GET / PUT all 200; empty name → 400 (silently swallowed by the UI).
+`components/SettingsClient.tsx`:
+- `const [services, setServices] = useState<ServiceId[]>([])` — starts empty.
+- `useEffect` GETs prefs and `setServices(d.savedServices)` asynchronously.
+- `handleSave` body: `{ displayName, savedServices: services }` — always includes `services`, which
+  is `[]` until the GET lands. The PUT route applies `savedServices` whenever it's a valid array,
+  so an early save writes `[]`.
 
 ## Stack Choices
 
-- **`PUT`**: switch `prisma.user.update` → `prisma.user.updateMany` (returns `{count}`, never throws
-  P2025); `count === 0` ⇒ stale session ⇒ `401`. No exception-as-control-flow.
-- **Settings page**: `redirect('/auth/signin')` (next/navigation) when the user row is null — matches
-  `ProfileGuard.requireUserId`'s existing redirect-on-no-session pattern.
-- **`SettingsClient`**: add an `error` state; on save, `401` ⇒ `window.location.href='/auth/signin'`,
-  other non-OK ⇒ show the server's error message. Reuses the existing styling.
-- **Test**: new `__tests__/api/user-preferences.test.ts` (Prisma + auth mocked, repo convention).
+- Add a `servicesKnown` flag set **true only after a successful load** (a `savedServices` array came
+  back). `handleSave` includes `savedServices` in the body **only when `servicesKnown`**; otherwise it
+  omits the field, so the PUT route's `if (Array.isArray(body.savedServices))` is false and services
+  are left untouched. This distinguishes "not loaded yet" (omit) from "loaded, user chose empty" (send `[]`).
+- Guard the GET effect with an `active` cleanup flag (avoid setState after unmount).
+- Test: new `__tests__/components/SettingsClient.test.tsx` (jsdom) mocking `global.fetch` — the repo's
+  jsdom env lacks fetch, so a full mock is used (see memory `reference-jest-jsdom-no-fetch`).
 
 ## Environment Verification
 
-- Reproduced on a fresh dev server (`:3100`) with seed users; `P2025` confirmed in logs.
-- No schema change → no migration. (NOTE: the repro mutated `alice`'s name/services and deleted a
-  throwaway user — restore via `npm run db:seed` (upsert) in cleanup.)
+- The stale-session fix (#18) is on `main`; this branches off it.
+- `StreamingServicePicker` renders each service's name + `aria-pressed` — usable to assert the loaded
+  state in the test.
 
 ## Risks & Edge Cases
 
-- `updateMany` with empty `data` + existing user → `count 1` ⇒ ok (no-op) — unchanged behavior;
-  SettingsClient always sends a valid body anyway.
-- The page redirect uses `redirect()` which throws `NEXT_REDIRECT` (handled by Next) and narrows
-  `user` to non-null afterward.
-- Defense-in-depth: same root cause (missing user) handled at page, API, and client layers.
+- User toggles a service before load → GET overwrites it (server value wins). Minor, no data loss; not
+  the reported bug. (No `disabled` prop on the picker; not adding one.)
+- Explicit "clear all services" after load: `services=[]` + `servicesKnown=true` ⇒ sends `[]` ⇒ clears
+  (correct).
+- Name-only save before load: omits `savedServices` ⇒ name saved, services preserved.
 
 ## Assumptions & Open Questions
 
-- Treat a stale session (account gone) as `401` ⇒ re-authenticate. No blocking questions.
+- The route already treats a missing `savedServices` as "leave unchanged". No blocking questions.
 
 ## Out of Scope
 
-- The save-before-load race in `SettingsClient` (services could be saved as `[]` if Save is clicked
-  before the GET populates them) — real but separate; not the reported symptom. Noted for later.
-- Broad resilience to transient DB errors across all routes.
+- Disabling the picker during load; broader settings UX changes.
 
 ## Readiness Verdict: READY FOR PLANNING
