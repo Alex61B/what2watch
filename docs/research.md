@@ -1,55 +1,51 @@
-# Research — Event tracking pipeline (Phase 2b: funnel + feature emits)
+# Research — Tier-0 recommender (cycle 2: schema + persistence + queue wiring)
 
-Spec/plan: `docs/superpowers/{specs,plans}/2026-06-10-event-tracking-pipeline*`. Phases 1 + 2a
-shipped (core pipeline + dwell signal). This cycle adds the remaining client-side emits.
+Spec/plan: `docs/superpowers/{specs,plans}/2026-06-11-recommender-tier0*`. Cycle 1 (pure
+`lib/recommender.ts` scorer) shipped + verified. This cycle wires it in. **The DB migration is
+deferred to a gated step** — code is written + `prisma generate`d so it typechecks; `migrate dev`
+runs only on explicit user approval (run with the local CLI).
 
 ## Requirements Summary
 
-Add `track()` calls at the client action sites for the room funnel and feature usage, using the
-Phase 1 client + allowlist. One-liners, additive, no behavior change.
+- `RoomQueue` gains `genreIds Int[]` + `rating Float`, populated at build time in `start` + `requeue`
+  from `discoverMovies`.
+- `queue/route.ts` selects the next card by **highest group-consensus score** (via cycle-1
+  `pickNext`) instead of lowest position, falling back to lowest position on cold start / no signal.
+- Votes signal is read from `Vote` (by room id); dwell from `Event` `card_decided` (by room **code**,
+  YES only) — a key mismatch degrades to votes-only, never zeroes. Response gains `pickedBy` + a
+  `[queue] picked` log.
 
-| Event | Site |
-|---|---|
-| `room_created` | `app/page.tsx` `handleCreateRoom` (create success) |
-| `room_joined` | `app/page.tsx` `handleJoinRoom` + `app/room/[code]/lobby/page.tsx` `handleJoin` |
-| `room_started` | `app/room/[code]/setup/page.tsx` `handleStart` + `lobby/page.tsx` `handleStart` |
-| `feature_used: share_link` | `app/page.tsx` + `components/RoomCodeBar.tsx` (copyLink/share) |
-| `feature_used: skip_reruns` | `setup/page.tsx` `patchWatchedFilter` |
-| `feature_used: depth_change` | `setup/page.tsx` `onDepthChange` |
-| `feature_used: filter_edit` | `components/HostFilterEditor.tsx` `handleApply` (after PATCH ok) |
-| `feature_used: requeue` | `components/DrainedScreen.tsx` `dealMore` |
+## Stack Choices / Environment Verification
 
-`room_matched` already shipped in 2a.
-
-## Stack Choices
-
-- Reuse `track()` from `lib/analytics.ts` and the `FEATURES`/`EVENT_TYPES` allowlist from
-  `lib/analytics-events.ts`. No new modules, no new tests (thin call-site wiring).
-- `share` handlers that fall back to `copyLink` emit only once: `copyLink` always tracks; `share`
-  tracks only in its `navigator.share` branch.
-
-## Environment Verification
-
-- Exact handler anchors read for all 6 files (create/join/start success points; the
-  `patchWatchedFilter`, `onDepthChange`, `handleApply`, `dealMore`, `copyLink`/`share` bodies).
-- All target files are `'use client'` components — `track()` runs client-side and no-ops on SSR.
+- **Queue route block confirmed** (lines 68–105): replace `notInClause` + `roomQueue.findFirst` +
+  `roomQueue.count` with `roomQueue.findMany` (select incl. `genreIds`/`rating`) → JS exclude via
+  `excludedSet` → build signal (`vote.findMany` all + dwell-by-code) → `pickNext` → fallback. Keep the
+  exclusion computation, heartbeat, and TMDB fetch.
+- **`room.code`** is on the `findUnique` result (no select) → available for the dwell join.
+- **`start.test.ts` unaffected** — it reads only `position`/`tmdbMovieId` from `roomQueue.createMany`
+  data; extra fields are ignored. Not in the manifest.
+- **`queue-route.test.ts` reworked**: mock `roomQueue.findMany` + `event.findMany` (drop
+  `findFirst`/`count`); `getMovieById` echoes the id so the chosen card is assertable; exclusion is
+  verified by which candidate is chosen; add warm (`pickedBy:score`) + cold (`pickedBy:fallback`) cases.
+- `prisma generate` (safe, no DB) makes `genreIds`/`rating` typecheck before the gated migration.
 
 ## Risks & Edge Cases
 
-- **Double-count on share fallback** — avoided by tracking link-share in `copyLink` + only the
-  `navigator.share` branch of `share`.
-- **No behavior change** — emits are fire-and-forget, added after the relevant success/branch.
-- **Lint** — `track` imported and used in each file; inline `onDepthChange` gains a third statement.
+- **Migration deferred/gated** — schema edited + generated this cycle; `migrate dev` is the gated
+  follow-up (local CLI per `reference-prisma-migrate-local-cli`; drift recovery is user-run).
+- **Dwell key** is room **code** (not id); miss ⇒ votes-only weighting (never zeroed); `dwellMatches`
+  logged for observability.
+- **No behavior change for existing/pre-migration rooms** (genreIds=[], rating=0 ⇒ score 0 ⇒
+  position tie-break) and **cold rooms** (<5 votes ⇒ fallback) — both byte-for-byte today's order.
+- `vote.findMany` is now called three times (member votes, rejects, all-for-signal) — the test mock
+  differentiates by `where` (memberId / vote:false / roomId-only).
 
 ## Assumptions & Open Questions
 
-- `roomId` at the client layer is the room **code** (what the client holds) — acceptable; the
-  Event table stores it as a string. No blocking questions.
+- `pickedBy` added to the `/queue` JSON is ignored by the vote page (no UI change). No blocking questions.
 
 ## Out of Scope
 
-- **`friend_compare`** intentionally dropped: visiting `/profile/friends/[id]` is already captured
-  by `page_view`, so a separate event would be redundant.
-- Recommender logic, dashboards, retention cron.
+- Running the migration (gated); UI changes; Tier-1+ ranking; TMDB recommendation candidate generation.
 
 ## Readiness Verdict: READY FOR PLANNING

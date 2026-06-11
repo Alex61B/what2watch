@@ -2,12 +2,11 @@
  * @jest-environment node
  *
  * Route tests for GET /api/rooms/[code]/queue — the per-member "next card".
- * The card is sourced from RoomQueue (lowest position the member hasn't voted on,
- * nobody has vetoed, and isn't filtered as seen), so each member advances
- * independently and a host requeue is picked up. Covers the guards, the
- * voted/rejected/watched exclusion (incl. the watchedFilter OR-clause for a
- * linked user), the null short-circuits (no eligible card, TMDB failure), the
- * heartbeat, and the hydrated success shape.
+ * The card is the highest group-consensus-scoring eligible RoomQueue entry
+ * (lib/recommender), falling back to lowest position on cold start (< 5 votes) or
+ * no signal. Eligible = not voted on by this member, not vetoed room-wide, not
+ * filtered as seen. Covers the guards, the voted/rejected/watched exclusion, the
+ * null short-circuits, the heartbeat, the warm score-rank, and the cold fallback.
  */
 import { GET as getQueue } from '@/app/api/rooms/[code]/queue/route'
 import { prisma } from '@/lib/prisma'
@@ -20,7 +19,8 @@ jest.mock('@/lib/prisma', () => ({
     room: { findUnique: jest.fn() },
     vote: { findMany: jest.fn() },
     watchedMovie: { findMany: jest.fn() },
-    roomQueue: { findFirst: jest.fn(), count: jest.fn() },
+    roomQueue: { findMany: jest.fn() },
+    event: { findMany: jest.fn() },
   },
 }))
 jest.mock('@/lib/tmdb', () => ({ getMovieById: jest.fn() }))
@@ -41,9 +41,18 @@ const memberUpdate = prisma.member.update as jest.Mock
 const roomFindUnique = prisma.room.findUnique as jest.Mock
 const voteFindMany = prisma.vote.findMany as jest.Mock
 const watchedFindMany = prisma.watchedMovie.findMany as jest.Mock
-const roomQueueFindFirst = prisma.roomQueue.findFirst as jest.Mock
-const roomQueueCount = prisma.roomQueue.count as jest.Mock
+const roomQueueFindMany = prisma.roomQueue.findMany as jest.Mock
+const eventFindMany = prisma.event.findMany as jest.Mock
 const mockMovie = getMovieById as jest.Mock
+
+const entry = (tmdbMovieId: string, position: number, genreIds: number[] = [], rating = 0) => ({
+  tmdbMovieId,
+  position,
+  genreIds,
+  rating,
+  watchUrl: 'http://w',
+  streamingService: 'netflix',
+})
 
 const ctx = (code: string) => ({ params: Promise.resolve({ code }) })
 const req = () => new Request('http://test/queue')
@@ -55,20 +64,14 @@ function authAs(code: string, over: Record<string, unknown> = {}) {
 beforeEach(() => {
   jar.clear()
   memberFindUnique.mockReset()
-  memberUpdate.mockReset()
-  memberUpdate.mockResolvedValue({})
-  roomFindUnique.mockReset()
-  roomFindUnique.mockResolvedValue({ id: 'r1', code: 'AAA-11', watchedFilter: false })
-  voteFindMany.mockReset()
-  voteFindMany.mockResolvedValue([])
-  watchedFindMany.mockReset()
-  watchedFindMany.mockResolvedValue([])
-  roomQueueFindFirst.mockReset()
-  roomQueueFindFirst.mockResolvedValue({ tmdbMovieId: '10', watchUrl: 'http://w', streamingService: 'netflix' })
-  roomQueueCount.mockReset()
-  roomQueueCount.mockResolvedValue(5)
-  mockMovie.mockReset()
-  mockMovie.mockResolvedValue({ tmdbId: '10', title: 'Parasite' })
+  memberUpdate.mockReset().mockResolvedValue({})
+  roomFindUnique.mockReset().mockResolvedValue({ id: 'r1', code: 'AAA-11', watchedFilter: false })
+  voteFindMany.mockReset().mockResolvedValue([])
+  watchedFindMany.mockReset().mockResolvedValue([])
+  roomQueueFindMany.mockReset().mockResolvedValue([entry('10', 0)])
+  eventFindMany.mockReset().mockResolvedValue([])
+  // Echo the requested id so the CHOSEN card is assertable from the response.
+  mockMovie.mockReset().mockImplementation(async (id: string) => ({ tmdbId: id, title: `Movie ${id}` }))
 })
 
 describe('GET /queue', () => {
@@ -97,24 +100,27 @@ describe('GET /queue', () => {
     })
   })
 
-  it('returns the hydrated next card with watchUrl/streamingService and the remaining count', async () => {
+  it('returns the hydrated next card with watchUrl/streamingService, remaining, and pickedBy', async () => {
     authAs('AAA-11')
     const body = await (await getQueue(req(), ctx('AAA-11'))).json()
     expect(body).toEqual({
-      movie: { tmdbId: '10', title: 'Parasite', watchUrl: 'http://w', streamingService: 'netflix' },
-      remaining: 5,
+      movie: { tmdbId: '10', title: 'Movie 10', watchUrl: 'http://w', streamingService: 'netflix' },
+      remaining: 1,
+      pickedBy: 'fallback',
     })
   })
 
-  it('orders the next card by room-queue position', async () => {
+  it('cold room (< 5 votes) falls back to the lowest-position card', async () => {
     authAs('AAA-11')
-    await getQueue(req(), ctx('AAA-11'))
-    expect(roomQueueFindFirst.mock.calls[0][0]).toMatchObject({ orderBy: { position: 'asc' } })
+    roomQueueFindMany.mockResolvedValue([entry('p1', 1, [28], 9), entry('p0', 0, [18], 1)])
+    const body = await (await getQueue(req(), ctx('AAA-11'))).json()
+    expect(body.pickedBy).toBe('fallback')
+    expect(body.movie.tmdbId).toBe('p0') // lowest position, despite p1's higher rating
   })
 
   it('returns null when no eligible card remains in the room queue', async () => {
     authAs('AAA-11')
-    roomQueueFindFirst.mockResolvedValue(null)
+    roomQueueFindMany.mockResolvedValue([])
     expect(await (await getQueue(req(), ctx('AAA-11'))).json()).toBeNull()
   })
 
@@ -126,17 +132,19 @@ describe('GET /queue', () => {
     expect(await res.json()).toBeNull()
   })
 
-  it('excludes the member votes, the room rejects, and watched movies from the next-card query', async () => {
+  it('excludes the member votes, the room rejects, and watched movies from eligibility', async () => {
     authAs('AAA-11')
-    voteFindMany.mockImplementation(async ({ where }: { where: { vote?: boolean } }) =>
-      where.vote === false ? [{ tmdbMovieId: '2' }] : [{ tmdbMovieId: '1' }],
-    )
+    roomQueueFindMany.mockResolvedValue([entry('1', 0), entry('2', 1), entry('3', 2), entry('10', 3)])
+    voteFindMany.mockImplementation(async ({ where }: { where: { memberId?: string; vote?: boolean } }) => {
+      if (where.memberId) return [{ tmdbMovieId: '1' }] // this member's vote
+      if (where.vote === false) return [{ tmdbMovieId: '2' }] // room-wide reject
+      return [] // all-votes signal query
+    })
     watchedFindMany.mockResolvedValue([{ tmdbMovieId: '3' }])
 
-    await getQueue(req(), ctx('AAA-11'))
-
-    const where = roomQueueFindFirst.mock.calls[0][0].where as { tmdbMovieId: { notIn: string[] } }
-    expect(new Set(where.tmdbMovieId.notIn)).toEqual(new Set(['1', '2', '3']))
+    const body = await (await getQueue(req(), ctx('AAA-11'))).json()
+    // 1/2/3 excluded ⇒ only '10' eligible ⇒ it must be the chosen card.
+    expect(body.movie.tmdbId).toBe('10')
   })
 
   it('with watchedFilter on + a linked user, queries room-wide and cross-room watched history', async () => {
@@ -150,5 +158,24 @@ describe('GET /queue', () => {
         where: { OR: [{ member: { roomId: 'r1' } }, { member: { userId: 'user-1' } }] },
       }),
     )
+  })
+
+  it('warm room ranks the next card by genre score and reports pickedBy:score', async () => {
+    authAs('AAA-11')
+    // Two eligible cards (drama / action) + five already-voted action seeds that train the signal.
+    roomQueueFindMany.mockResolvedValue([
+      entry('drama', 0, [18]),
+      entry('action', 1, [28]),
+      ...Array.from({ length: 5 }, (_, i) => entry(`seed${i}`, 10 + i, [28])),
+    ])
+    voteFindMany.mockImplementation(async ({ where }: { where: { memberId?: string; vote?: boolean } }) => {
+      if (where.memberId) return Array.from({ length: 5 }, (_, i) => ({ tmdbMovieId: `seed${i}` })) // excluded
+      if (where.vote === false) return []
+      return Array.from({ length: 5 }, (_, i) => ({ tmdbMovieId: `seed${i}`, vote: true })) // 5 YES on action
+    })
+
+    const body = await (await getQueue(req(), ctx('AAA-11'))).json()
+    expect(body.pickedBy).toBe('score')
+    expect(body.movie.tmdbId).toBe('action') // genre 28 favored over drama (18)
   })
 })
