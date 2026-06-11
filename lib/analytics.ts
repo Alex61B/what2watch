@@ -18,11 +18,24 @@ let buffer: OutEvent[] = []
 let scheduled = false
 let listenersBound = false
 
+// crypto.randomUUID isn't available in every environment (older / non-secure-context
+// browsers, the jsdom test env) — fall back so getAnonId can never throw.
+function newAnonId(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID()
+    }
+  } catch {
+    // fall through
+  }
+  return `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 export function getAnonId(): string {
   if (typeof window === 'undefined') return ''
   let id = localStorage.getItem(ANON_KEY)
   if (!id) {
-    id = crypto.randomUUID()
+    id = newAnonId()
     localStorage.setItem(ANON_KEY, id)
   }
   return id
@@ -31,7 +44,15 @@ export function getAnonId(): string {
 export function flush(): void {
   scheduled = false
   if (typeof window === 'undefined' || buffer.length === 0) return
-  const payload = JSON.stringify({ anonId: getAnonId(), events: buffer })
+  // Fully fire-and-forget: building the payload (getAnonId) must never throw into the
+  // caller — a vote handler or a button click. Any failure just drops the batch.
+  let payload: string
+  try {
+    payload = JSON.stringify({ anonId: getAnonId(), events: buffer })
+  } catch {
+    buffer = []
+    return
+  }
   buffer = []
   try {
     if (navigator.sendBeacon?.('/api/events', new Blob([payload], { type: 'application/json' }))) {

@@ -1,3 +1,7 @@
-lib/dwell.ts
-__tests__/lib/dwell.test.ts
-app/room/[code]/vote/page.tsx
+app/page.tsx
+app/room/[code]/setup/page.tsx
+app/room/[code]/lobby/page.tsx
+components/RoomCodeBar.tsx
+components/HostFilterEditor.tsx
+components/DrainedScreen.tsx
+lib/analytics.ts

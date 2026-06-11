@@ -1,54 +1,55 @@
-# Research — Event tracking pipeline (Phase 2a: dwell signal)
+# Research — Event tracking pipeline (Phase 2b: funnel + feature emits)
 
-Spec/plan: `docs/superpowers/{specs,plans}/2026-06-10-event-tracking-pipeline*`.
-Phase 1 (core pipeline: Event table + ingest + client track + AnalyticsTracker) shipped and
-verified; migration applied on Prisma 6.19.3 (an accidental npx 6→7 bump was reverted).
-
-Phase 2 is split to keep each cycle small and reviewable:
-- **2a (this cycle):** the recommender-critical **dwell signal** — `lib/dwell.ts` + wiring
-  `card_decided` (with visibility-aware, ceiling-capped dwell) into the vote page, plus the
-  `room_matched` funnel event (already in that file) and the `docs/analytics-queries.md` doc.
-- **2b (next cycle):** the remaining funnel (`room_created/joined/started`) and `feature_used`
-  emits across `app/page.tsx`, lobby/setup pages, `RoomCodeBar`, `DrainedScreen`,
-  `HostFilterEditor`, and the friends pages (~8 client sites; simple one-liners each).
+Spec/plan: `docs/superpowers/{specs,plans}/2026-06-10-event-tracking-pipeline*`. Phases 1 + 2a
+shipped (core pipeline + dwell signal). This cycle adds the remaining client-side emits.
 
 ## Requirements Summary
 
-Capture clean per-slide attention time as `card_decided { movieId, vote, dwellMs, dwellCapped? }`
-— the implicit-feedback signal for the future recommender. Dwell counts only visible, current-card
-time (pause on tab hide) and is hard-capped at 60s. Emit `room_matched` when a vote produces a match.
+Add `track()` calls at the client action sites for the room funnel and feature usage, using the
+Phase 1 client + allowlist. One-liners, additive, no behavior change.
+
+| Event | Site |
+|---|---|
+| `room_created` | `app/page.tsx` `handleCreateRoom` (create success) |
+| `room_joined` | `app/page.tsx` `handleJoinRoom` + `app/room/[code]/lobby/page.tsx` `handleJoin` |
+| `room_started` | `app/room/[code]/setup/page.tsx` `handleStart` + `lobby/page.tsx` `handleStart` |
+| `feature_used: share_link` | `app/page.tsx` + `components/RoomCodeBar.tsx` (copyLink/share) |
+| `feature_used: skip_reruns` | `setup/page.tsx` `patchWatchedFilter` |
+| `feature_used: depth_change` | `setup/page.tsx` `onDepthChange` |
+| `feature_used: filter_edit` | `components/HostFilterEditor.tsx` `handleApply` (after PATCH ok) |
+| `feature_used: requeue` | `components/DrainedScreen.tsx` `dealMore` |
+
+`room_matched` already shipped in 2a.
 
 ## Stack Choices
 
-- **Pure `lib/dwell.ts`** (clock injected) so the accumulator is unit-tested without a DOM.
-- Wire into `app/room/[code]/vote/page.tsx`: a `dwellRef` started by an effect keyed on the
-  current movie id, a `visibilitychange` listener for pause/resume, and `finalizeDwell` + `track`
-  in the existing `handleVote`. `room_matched` goes in the existing `data.matched` branch.
-- Reuse the `track()` client from Phase 1; no new infra.
+- Reuse `track()` from `lib/analytics.ts` and the `FEATURES`/`EVENT_TYPES` allowlist from
+  `lib/analytics-events.ts`. No new modules, no new tests (thin call-site wiring).
+- `share` handlers that fall back to `copyLink` emit only once: `copyLink` always tracks; `share`
+  tracks only in its `navigator.share` branch.
 
 ## Environment Verification
 
-- Vote page read: `card.tmdbId` is the current movie; `handleVote(vote)` is the single decision
-  point; line ~198 `data.matched` is the match branch; `code` is the room code. All present.
-- `lib/analytics.ts`, `lib/analytics-events.ts` (with `DWELL_CEILING_MS`) from Phase 1 are in place.
-- `verify.sh` green at Phase 1 close (200 tests); Prisma back on 6.19.3.
+- Exact handler anchors read for all 6 files (create/join/start success points; the
+  `patchWatchedFilter`, `onDepthChange`, `handleApply`, `dealMore`, `copyLink`/`share` bodies).
+- All target files are `'use client'` components — `track()` runs client-side and no-ops on SSR.
 
 ## Risks & Edge Cases
 
-- **Backgrounded tab must not inflate dwell** — visibility-aware accumulation + 60s ceiling+flag.
-- **exhaustive-deps lint** — the dwell effect keys on a derived `cardId` (not the `card` object) so
-  it restarts only when the movie changes and satisfies the hook lint rule.
-- **No behavior change** — instrumentation is additive; voting/advance logic untouched.
-- Dwell helper is pure → fully unit-tested (visible-only accrual, pause/resume idempotence, cap+flag).
+- **Double-count on share fallback** — avoided by tracking link-share in `copyLink` + only the
+  `navigator.share` branch of `share`.
+- **No behavior change** — emits are fire-and-forget, added after the relevant success/branch.
+- **Lint** — `track` imported and used in each file; inline `onDepthChange` gains a third statement.
 
 ## Assumptions & Open Questions
 
-- One `card_decided` per swipe (no separate skip action — confirmed from the vote page).
-- `dwellCapped` only set when raw dwell exceeds the ceiling. No blocking questions.
+- `roomId` at the client layer is the room **code** (what the client holds) — acceptable; the
+  Event table stores it as a string. No blocking questions.
 
 ## Out of Scope
 
-- 2b funnel + `feature_used` emits (next cycle).
-- Recommender logic; dashboards; retention cron.
+- **`friend_compare`** intentionally dropped: visiting `/profile/friends/[id]` is already captured
+  by `page_view`, so a separate event would be redundant.
+- Recommender logic, dashboards, retention cron.
 
 ## Readiness Verdict: READY FOR PLANNING

@@ -2,6 +2,22 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-10 — Event tracking pipeline (Phase 2b: funnel + feature emits)
+
+**Prompt (summary):** Wire the remaining client emits: room funnel (`room_created`/`room_joined`/
+`room_started`) and `feature_used` (`share_link`, `skip_reruns`, `depth_change`, `filter_edit`,
+`requeue`) across the landing, lobby, setup pages and the RoomCodeBar / HostFilterEditor /
+DrainedScreen components. (`friend_compare` intentionally dropped — covered by `page_view`.)
+
+**Approach:** One-line `track()` calls at each action's success/branch (link-share tracked once
+across the `copyLink`/`navigator.share` fallback). Remediation: my new emit in `DrainedScreen` made
+its component test surface a latent bug — `getAnonId` called `crypto.randomUUID()`, which throws in
+the jsdom env (and non-secure-context browsers); hardened `lib/analytics.ts` with a `randomUUID`
+fallback + a fully fire-and-forget `flush` that never throws.
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 204 Jest tests (31 suites). One
+remediation loop (the crypto.randomUUID bug), then green.
+
 ## 2026-06-10 — Event tracking pipeline (Phase 2a: dwell signal)
 
 **Prompt (summary):** Build the recommender-critical dwell signal: a pure visibility-aware,
