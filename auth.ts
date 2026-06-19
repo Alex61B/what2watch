@@ -4,6 +4,7 @@ import Credentials from 'next-auth/providers/credentials'
 import Google from 'next-auth/providers/google'
 import bcrypt from 'bcryptjs'
 import { prisma } from '@/lib/prisma'
+import { recordLoginEvent } from '@/lib/login-event'
 
 export const { handlers, auth, signIn, signOut } = NextAuth(() => ({
   adapter: (() => {
@@ -59,6 +60,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth(() => ({
     session({ session, token }) {
       if (token.userId) session.user.id = token.userId as string
       return session
+    },
+  },
+  // Best-effort login tracking — must never block sign-in (recordLoginEvent swallows errors).
+  events: {
+    async signIn({ user, account }) {
+      await recordLoginEvent({ user, account })
     },
   },
 }))

@@ -5,6 +5,7 @@
 
 export const EVENT_TYPES = [
   'session_start',
+  'login',
   'page_view',
   'room_created',
   'room_joined',

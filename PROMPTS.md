@@ -391,4 +391,26 @@ previously relied on the page-wide white cascade).
 
 **Verification:** `scripts/verify.sh` green — typecheck + lint + 111 Jest tests pass; `npm run build`
 succeeds.
+
+## 2026-06-12 — Admin / developer dashboard (V1)
+
+**Prompt (summary):** Add a private, read-only internal admin dashboard at `/admin` to view users,
+activity, and analytics — never exposed to normal users, enforced server-side, unauthorized → 404.
+Authorize via an `ADMIN_EMAILS` env allowlist (no `isAdmin` column). Keep V1 read-only, tables/numbers
+(no charts), no DB migrations, manual `Event.userId → User.id` joins, and add small best-effort login
+tracking that must never break sign-in. Do not expose password hashes, session tokens, or auth tokens.
+
+**Approach:** `lib/admin.ts` `requireAdmin()` (allowlist parse + DB email lookup → `notFound()` on any
+non-admin); `lib/admin-queries.ts` read-only data layer (overview metrics, per-day actives via one
+`date_trunc` `$queryRaw`, users list with a per-page `event.groupBy` activity join, user detail, user
+events, global events feed with a batched user-identity join) — every `select` is a safe-column
+allowlist. Pure server-component pages (`app/admin/{layout,page,users,users/[id],events}`) guarded
+before any query; paging/filtering via `searchParams`; no admin API routes. Login tracking: add
+`'login'` to `EVENT_TYPES`, a best-effort `lib/login-event.ts` `recordLoginEvent()` (added to the
+manifest in IMPLEMENT for testability), wired into `auth.ts` `events.signIn`. `ADMIN_EMAILS` documented
+in a new `README.md` (no `.env*` touched). Spec/plan in `docs/superpowers/{specs,plans}/2026-06-12-*`.
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 250 Jest tests pass (39 suites),
+drift-free. New tests: admin guard (8), admin queries incl. PII-leak guard (9), login event (4),
+per-page access control (5).
 </content>
