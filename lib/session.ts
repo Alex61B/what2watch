@@ -45,6 +45,7 @@ export function setSessionCookie(
   response.cookies.set(sessionCookieName(code), token, {
     httpOnly: true,
     sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
     maxAge: maxAgeSeconds,
     path: '/',
   })
@@ -52,5 +53,11 @@ export function setSessionCookie(
 
 /** Clear a stale per-room session cookie. */
 export function clearSessionCookie(response: NextResponse, code: string): void {
-  response.cookies.set(sessionCookieName(code), '', { path: '/', maxAge: 0 })
+  response.cookies.set(sessionCookieName(code), '', {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    path: '/',
+    maxAge: 0,
+  })
 }

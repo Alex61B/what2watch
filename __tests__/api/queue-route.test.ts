@@ -65,7 +65,7 @@ beforeEach(() => {
   jar.clear()
   memberFindUnique.mockReset()
   memberUpdate.mockReset().mockResolvedValue({})
-  roomFindUnique.mockReset().mockResolvedValue({ id: 'r1', code: 'AAA-11', watchedFilter: false })
+  roomFindUnique.mockReset().mockResolvedValue({ id: 'r1', code: 'AAA-11', watchedFilter: false, expiresAt: new Date(Date.now() + 3_600_000) })
   voteFindMany.mockReset().mockResolvedValue([])
   watchedFindMany.mockReset().mockResolvedValue([])
   roomQueueFindMany.mockReset().mockResolvedValue([entry('10', 0)])
@@ -87,8 +87,14 @@ describe('GET /queue', () => {
 
   it('404 when the member belongs to another room', async () => {
     authAs('AAA-11')
-    roomFindUnique.mockResolvedValue({ id: 'rX', code: 'AAA-11', watchedFilter: false })
+    roomFindUnique.mockResolvedValue({ id: 'rX', code: 'AAA-11', watchedFilter: false, expiresAt: new Date(Date.now() + 3_600_000) })
     expect((await getQueue(req(), ctx('AAA-11'))).status).toBe(404)
+  })
+
+  it('410 when the room has expired', async () => {
+    authAs('AAA-11')
+    roomFindUnique.mockResolvedValue({ id: 'r1', code: 'AAA-11', watchedFilter: false, expiresAt: new Date(Date.now() - 1_000) })
+    expect((await getQueue(req(), ctx('AAA-11'))).status).toBe(410)
   })
 
   it('records a heartbeat (lastSeenAt) on each poll', async () => {
@@ -149,7 +155,7 @@ describe('GET /queue', () => {
 
   it('with watchedFilter on + a linked user, queries room-wide and cross-room watched history', async () => {
     authAs('AAA-11', { userId: 'user-1' })
-    roomFindUnique.mockResolvedValue({ id: 'r1', code: 'AAA-11', watchedFilter: true })
+    roomFindUnique.mockResolvedValue({ id: 'r1', code: 'AAA-11', watchedFilter: true, expiresAt: new Date(Date.now() + 3_600_000) })
 
     await getQueue(req(), ctx('AAA-11'))
 

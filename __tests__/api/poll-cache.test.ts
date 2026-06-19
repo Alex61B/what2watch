@@ -15,7 +15,7 @@ interface MemberRow {
 }
 
 const rooms = [
-  { id: 'rA', code: 'AAA-11', status: 'VOTING', matchedMovieId: null, currentPosition: 0, queueVersion: 0, watchedFilter: false, name: null },
+  { id: 'rA', code: 'AAA-11', status: 'VOTING', matchedMovieId: null, currentPosition: 0, queueVersion: 0, watchedFilter: false, name: null, expiresAt: new Date(Date.now() + 3_600_000) },
 ]
 const members: MemberRow[] = [
   { id: 'm1', roomId: 'rA', displayName: 'Bob', sessionToken: 'tok-bob', isHost: false, approved: true, userId: null, joinedAt: new Date(1), lastSeenAt: null, leftAt: null },
@@ -64,4 +64,19 @@ test('304 poll response also sets Cache-Control: no-store', async () => {
   )
   expect(res.status).toBe(304)
   expect(res.headers.get('Cache-Control')).toBe('no-store')
+})
+
+test('an expired room returns 200 { expired: true } and bypasses the 304 fast-path', async () => {
+  const original = rooms[0].expiresAt
+  rooms[0].expiresAt = new Date(Date.now() - 1_000)
+  try {
+    const res = await pollRoom(
+      new Request('http://test/api/rooms/AAA-11/poll', { headers: { 'If-None-Match': '"0"' } }),
+      ctx('AAA-11')
+    )
+    expect(res.status).toBe(200)
+    expect((await res.json()).expired).toBe(true)
+  } finally {
+    rooms[0].expiresAt = original
+  }
 })

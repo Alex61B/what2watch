@@ -50,6 +50,7 @@ interface PollResponse {
   queueVersion: number;
   currentMovie: Movie | null;
   isHost: boolean;
+  expired?: boolean;
 }
 
 const POLL_INTERVAL_MS = 1500;
@@ -80,6 +81,7 @@ export default function VotePage() {
   // null = the member has voted on everything (their deck is exhausted).
   const [card, setCard] = useState<Movie | null | undefined>(undefined);
   const [remaining, setRemaining] = useState(0);
+  const [expired, setExpired] = useState(false);
 
   const stoppedRef = useRef(false);
   const lastVersionRef = useRef<number | null>(null);
@@ -101,6 +103,11 @@ export default function VotePage() {
       if (res.status === 304) return;
       if (!res.ok) return;
       const data: PollResponse = await res.json();
+      if (data.expired) {
+        stoppedRef.current = true;
+        setExpired(true);
+        return;
+      }
       lastVersionRef.current =
         data.pendingApproval || data.notAdmitted ? null : data.queueVersion;
       setState(data);
@@ -302,6 +309,23 @@ export default function VotePage() {
     lastVersionRef.current = null; // force a fresh, non-304 poll
     void pollOnce();
   }, [pollOnce]);
+
+  if (expired) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center bg-canvas px-4 text-ink">
+        <div className="w-full max-w-sm space-y-4 text-center">
+          <h1 className="font-serif text-3xl font-bold">This room has expired</h1>
+          <p className="text-muted">Rooms close after a while. Start a fresh one to keep watching.</p>
+          <Link
+            href="/"
+            className="inline-block rounded-none bg-ink px-6 py-3 text-sm font-semibold uppercase tracking-wide text-canvas"
+          >
+            Back to home
+          </Link>
+        </div>
+      </main>
+    );
+  }
 
   if (!state) {
     return (

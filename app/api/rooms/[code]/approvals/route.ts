@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getSessionToken } from '@/lib/session'
+import { roomExpired, expiredRoomResponse } from '@/lib/room'
 
 // Host accepts or rejects a pending late-joiner.
 // POST { memberId: string, action: 'accept' | 'reject' }
@@ -24,6 +25,7 @@ export async function POST(
   if (!room || room.id !== host.roomId) {
     return NextResponse.json({ error: 'Room not found' }, { status: 404 })
   }
+  if (roomExpired(room)) return expiredRoomResponse()
 
   const body = await request.json().catch(() => ({}))
   const { memberId, action } = body

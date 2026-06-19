@@ -21,7 +21,7 @@ interface MemberRow {
 }
 
 const rooms = [
-  { id: 'rA', code: 'AAA-11', status: 'LOBBY', matchedMovieId: null, currentPosition: 0, queueVersion: 0, watchedFilter: false },
+  { id: 'rA', code: 'AAA-11', status: 'LOBBY', matchedMovieId: null, currentPosition: 0, queueVersion: 0, watchedFilter: false, expiresAt: new Date(Date.now() + 3_600_000) },
 ]
 let members: MemberRow[] = []
 let seq = 0
@@ -77,13 +77,16 @@ jest.mock('@/lib/prisma', () => {
       findFirst: jest.fn(async () => null),
       findUnique: jest.fn(async () => null),
     },
-    memberQueue: { createMany: jest.fn(async () => ({ count: 0 })) },
   }
   prisma.$transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn(prisma)
   return { prisma }
 })
 
 jest.mock('@/lib/tmdb', () => ({ getMovieById: jest.fn(async () => ({})) }))
+jest.mock('@/lib/rate-limit-db', () => ({
+  ...jest.requireActual('@/lib/rate-limit-db'),
+  checkRateLimit: jest.fn(async () => ({ ok: true, retryAfterSeconds: 0 })),
+}))
 
 const jar = new Map<string, string>()
 jest.mock('next/headers', () => ({

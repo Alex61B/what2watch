@@ -2,6 +2,34 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-18 — M1: Operational Floor (production hardening)
+
+**Prompt (summary):** After an architecture review of the next improvement milestones,
+formalize **M1: Operational Floor** and implement it. Scope to production-readiness only (no
+recommender/product features): expired-room enforcement, cleanup cron, durable rate limiting,
+safe error responses, cookie hardening, health check + monitoring, and `MemberQueue`
+retirement. Prefer centralized helpers and small safe changes. Branch off `main` after the
+admin work is merged.
+
+**Findings (RESEARCH):** `Room.expiresAt` set but enforced nowhere; no cron/`vercel.json`;
+rate limiter in-memory/per-instance with signup+room-create+join unprotected; 6 routes leak
+`{stack,stage}` on 500; session cookie lacks `secure`; no `/api/health`; `MemberQueue` is
+write-only (read nowhere). Decided: Postgres-backed limiter (no Upstash), Vercel Cron
+(secured by `CRON_SECRET`), Sentry deferred (centralized error helper is the seam),
+`MemberQueue` **code-only** this cycle (stop writing; drop deferred).
+
+**Implementation:** new `lib/room.ts` (`roomExpired`/410 guard wired into 8 mutation routes +
+`expired` flag on poll/GET + client surfacing in vote/lobby), `lib/api-error.ts`
+(`logServerError`/`serverError` — generic 500s, full server logs), `lib/rate-limit-db.ts`
+(durable fixed-window Postgres limiter on signup/room-create/join/events; fails open),
+`app/api/health/route.ts`, `app/api/cron/cleanup/route.ts` + `vercel.json` (daily). Cookie
+`secure` in prod; removed the two `MemberQueue` writes. Schema adds `RateLimit` (additive).
+
+**Verification:** Full RESEARCH→PLAN→IMPLEMENT→TEST cycle on `feat/operational-floor` (TDD);
+`scripts/verify.sh` green — typecheck + lint + 283 Jest tests (45 suites). **User must run the
+`RateLimit` migration (`./node_modules/.bin/prisma migrate dev`) and set `CRON_SECRET` before
+deploy.** `MemberQueue` table drop and Sentry wiring deferred to a fast-follow.
+
 ## 2026-06-11 — Fix: SettingsClient save-before-load race wiped services
 
 **Prompt (summary):** Follow-up to #18 — fix the race where saving Settings before the prefs GET

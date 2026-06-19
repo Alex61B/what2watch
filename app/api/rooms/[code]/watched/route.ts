@@ -3,6 +3,8 @@ import { prisma } from '@/lib/prisma'
 import { getSessionToken } from '@/lib/session'
 import { resolveMemberUserId } from '@/lib/link'
 import { addPreference } from '@/lib/preferences'
+import { roomExpired, expiredRoomResponse } from '@/lib/room'
+import { logServerError, serverError } from '@/lib/api-error'
 
 export async function POST(
   request: Request,
@@ -32,6 +34,7 @@ export async function POST(
     if (!room || room.id !== member.roomId) {
       return NextResponse.json({ error: 'Room not found' }, { status: 404 })
     }
+    if (roomExpired(room)) return expiredRoomResponse()
 
     stage = 'body-parse'
     const body = await request.json().catch(() => ({}))
@@ -65,17 +68,7 @@ export async function POST(
     // only — the movie stays in the deck and votes proceed normally.
     return NextResponse.json({ ok: true })
   } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err))
-    console.error('[watched] fatal error', {
-      stage,
-      roomCode,
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-    })
-    return NextResponse.json(
-      { error: error.message, stack: error.stack, name: error.name, stage },
-      { status: 500 }
-    )
+    logServerError('[watched]', { stage, roomCode }, err)
+    return serverError(500)
   }
 }

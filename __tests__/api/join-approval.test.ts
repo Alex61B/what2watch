@@ -10,6 +10,7 @@ import { GET as pollRoom } from '@/app/api/rooms/[code]/poll/route'
 import { POST as approve } from '@/app/api/rooms/[code]/approvals/route'
 import { POST as castVote } from '@/app/api/rooms/[code]/votes/route'
 import { sessionCookieName } from '@/lib/session'
+import { checkRateLimit } from '@/lib/rate-limit-db'
 
 interface MemberRow {
   id: string
@@ -24,8 +25,8 @@ interface MemberRow {
 }
 
 const rooms = [
-  { id: 'rA', code: 'AAA-11', status: 'LOBBY', matchedMovieId: null, currentPosition: 0, queueVersion: 0, watchedFilter: false, name: null },
-  { id: 'rB', code: 'BBB-22', status: 'VOTING', matchedMovieId: null, currentPosition: 0, queueVersion: 0, watchedFilter: false, name: null },
+  { id: 'rA', code: 'AAA-11', status: 'LOBBY', matchedMovieId: null, currentPosition: 0, queueVersion: 0, watchedFilter: false, name: null, expiresAt: new Date(Date.now() + 3_600_000) },
+  { id: 'rB', code: 'BBB-22', status: 'VOTING', matchedMovieId: null, currentPosition: 0, queueVersion: 0, watchedFilter: false, name: null, expiresAt: new Date(Date.now() + 3_600_000) },
 ]
 let members: MemberRow[] = []
 let seq = 0
@@ -79,13 +80,16 @@ jest.mock('@/lib/prisma', () => {
         findFirst: async () => null,
         findUnique: async () => null,
       },
-      memberQueue: { createMany: async () => ({ count: 0 }) },
   }
   prisma.$transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn(prisma)
   return { prisma }
 })
 
 jest.mock('@/lib/tmdb', () => ({ getMovieById: jest.fn(async () => ({})) }))
+jest.mock('@/lib/rate-limit-db', () => ({
+  ...jest.requireActual('@/lib/rate-limit-db'),
+  checkRateLimit: jest.fn(async () => ({ ok: true, retryAfterSeconds: 0 })),
+}))
 // The votes route transitively pulls in NextAuth (ESM) via these modules; stub
 // them so the suite can import the route without loading next-auth.
 jest.mock('@/auth', () => ({ auth: jest.fn(async () => null) }))
@@ -132,6 +136,14 @@ beforeEach(() => {
   ]
   seq = 0
   jar.clear()
+})
+
+test('join is rate-limited per IP (429 + Retry-After)', async () => {
+  ;(checkRateLimit as jest.Mock).mockResolvedValueOnce({ ok: false, retryAfterSeconds: 12 })
+  const res = await joinRoom(joinReq('AAA-11', 'Spammer'), ctx('AAA-11'))
+  expect(res.status).toBe(429)
+  expect(res.headers.get('Retry-After')).toBe('12')
+  expect(members.find(m => m.displayName === 'Spammer')).toBeUndefined()
 })
 
 test('lobby join is approved; voting join is pending', async () => {

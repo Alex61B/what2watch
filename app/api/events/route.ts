@@ -8,6 +8,7 @@ import { auth } from '@/auth'
 import { prisma } from '@/lib/prisma'
 import { isEventType, MAX_EVENTS_PER_REQUEST, MAX_PROPS_BYTES } from '@/lib/analytics-events'
 import { rateLimit } from '@/lib/rate-limit'
+import { checkRateLimit, RATE_LIMITS } from '@/lib/rate-limit-db'
 
 const NO_CONTENT = () => new NextResponse(null, { status: 204 })
 
@@ -27,8 +28,14 @@ export async function POST(request: Request) {
 
   const ip = (request.headers.get('x-forwarded-for') ?? '').split(',')[0].trim()
   const key = anonId ?? `ip:${ip || 'unknown'}`
+  // L1: cheap per-instance fast-path blunts a tight loop before it touches the DB.
   if (!rateLimit(key, rawEvents.length, Date.now())) {
     return new NextResponse(null, { status: 429 })
+  }
+  // L2: durable global cap across all serverless instances.
+  const durable = await checkRateLimit('events', key, RATE_LIMITS.events)
+  if (!durable.ok) {
+    return new NextResponse(null, { status: 429, headers: { 'Retry-After': String(durable.retryAfterSeconds) } })
   }
 
   const session = await auth().catch(() => null)

@@ -6,6 +6,7 @@
  */
 import { POST as createRoom } from '@/app/api/rooms/route'
 import { GET as getRoom, PATCH as patchRoom } from '@/app/api/rooms/[code]/route'
+import { checkRateLimit } from '@/lib/rate-limit-db'
 
 interface RoomRow {
   id: string
@@ -104,6 +105,10 @@ jest.mock('@/lib/prisma', () => {
 })
 
 jest.mock('@/lib/tmdb', () => ({ getMovieById: jest.fn(async () => ({})) }))
+jest.mock('@/lib/rate-limit-db', () => ({
+  ...jest.requireActual('@/lib/rate-limit-db'),
+  checkRateLimit: jest.fn(async () => ({ ok: true, retryAfterSeconds: 0 })),
+}))
 
 const jar = new Map<string, string>()
 jest.mock('next/headers', () => ({
@@ -171,4 +176,12 @@ test('GET returns the room name, and the host can rename via PATCH', async () =>
   expect(patched.status).toBe(200)
   expect((await patched.json()).name).toBe('Renamed Night')
   expect(rooms.find(r => r.code === code)?.name).toBe('Renamed Night')
+})
+
+test('room creation is rate-limited per IP (429 + Retry-After)', async () => {
+  ;(checkRateLimit as jest.Mock).mockResolvedValueOnce({ ok: false, retryAfterSeconds: 30 })
+  const res = await createRoom(createReq({ displayName: 'Alice' }))
+  expect(res.status).toBe(429)
+  expect(res.headers.get('Retry-After')).toBe('30')
+  expect(rooms).toHaveLength(0)
 })

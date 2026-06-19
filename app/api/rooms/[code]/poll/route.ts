@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getSessionToken, clearSessionCookie } from '@/lib/session'
 import { getMovieById, getWatchProviders } from '@/lib/tmdb'
+import { roomExpired } from '@/lib/room'
+import { logServerError, serverError } from '@/lib/api-error'
 
 export async function GET(
   request: Request,
@@ -41,6 +43,15 @@ export async function GET(
       )
       clearSessionCookie(res, code)
       return res
+    }
+
+    // An expired room stops the session cleanly: bypass the 304 fast-path and tell the
+    // client (which already polls every ~1.5s) so it can show the "expired" state.
+    if (roomExpired(room)) {
+      return NextResponse.json(
+        { expired: true, status: room.status },
+        { headers: { 'Cache-Control': 'no-store' } },
+      )
     }
 
     stage = 'etag-check'
@@ -167,17 +178,7 @@ export async function GET(
       }
     )
   } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err))
-    console.error('[poll] fatal error', {
-      stage,
-      roomCode,
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-    })
-    return NextResponse.json(
-      { error: error.message, stack: error.stack, name: error.name, stage },
-      { status: 500 }
-    )
+    logServerError('[poll]', { stage, roomCode }, err)
+    return serverError(500)
   }
 }
