@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getSessionToken } from '@/lib/session'
 import { getMovieById } from '@/lib/tmdb'
+import { roomExpired, expiredRoomResponse } from '@/lib/room'
 
 export async function GET(
   _request: Request,
@@ -52,6 +53,7 @@ export async function GET(
     watchedFilter: room.watchedFilter,
     members: room.members,
     matchedMovie,
+    expired: roomExpired(room),
     isCurrentUserHost: currentMember?.isHost ?? false,
     currentMemberId: currentMember?.id ?? null,
   })
@@ -74,6 +76,7 @@ export async function PATCH(
   if (!room || room.id !== member.roomId) {
     return NextResponse.json({ error: 'Room not found' }, { status: 404 })
   }
+  if (roomExpired(room)) return expiredRoomResponse()
 
   const body = await request.json().catch(() => ({}))
   const updateData: Record<string, unknown> = {}

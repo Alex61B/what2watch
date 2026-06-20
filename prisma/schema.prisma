@@ -214,3 +214,13 @@ model Event {
   @@index([userId])
   @@index([anonId])
 }
+
+// Durable fixed-window rate-limit counters (lib/rate-limit-db.ts). One row per
+// (scope, identifier, window); the cleanup cron purges rows past expiresAt.
+model RateLimit {
+  key       String   @id
+  count     Int      @default(0)
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}

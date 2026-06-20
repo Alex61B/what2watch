@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getSessionToken } from '@/lib/session'
 import { discoverMovies, STREAMING_SERVICES, type ServiceId, type DiscoverFilters } from '@/lib/tmdb'
+import { roomExpired, expiredRoomResponse } from '@/lib/room'
+import { logServerError, serverError } from '@/lib/api-error'
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr]
@@ -47,6 +49,7 @@ export async function POST(
     if (!room || room.id !== member.roomId) {
       return NextResponse.json({ error: 'Room not found' }, { status: 404 })
     }
+    if (roomExpired(room)) return expiredRoomResponse()
     if (room.status !== 'VOTING' && room.status !== 'DRAINED') {
       return NextResponse.json({ error: 'Room is not in a votable state' }, { status: 409 })
     }
@@ -135,13 +138,7 @@ export async function POST(
 
     return NextResponse.json({ requeued: true, added: fresh.length })
   } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err))
-    console.error('[requeue] fatal error', {
-      stage,
-      roomCode,
-      name: error.name,
-      message: error.message,
-    })
-    return NextResponse.json({ error: error.message, stage }, { status: 500 })
+    logServerError('[requeue]', { stage, roomCode }, err)
+    return serverError(500)
   }
 }

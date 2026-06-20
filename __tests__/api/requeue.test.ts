@@ -19,6 +19,7 @@ interface Room {
   currentPosition: number
   queueVersion: number
   watchedFilter: boolean
+  expiresAt: Date
 }
 
 let mockMember: Member | null = null
@@ -88,6 +89,7 @@ function votingRoom(over: Partial<Room> = {}): Room {
     currentPosition: 3,
     queueVersion: 5,
     watchedFilter: false,
+    expiresAt: new Date(Date.now() + 3_600_000),
     ...over,
   }
 }
@@ -129,6 +131,12 @@ describe('POST /requeue', () => {
     hostOf('AAA-11')
     mockRoom = votingRoom({ status: 'LOBBY' })
     expect((await requeue(req(), ctx('AAA-11'))).status).toBe(409)
+  })
+
+  it('410 when the room has expired', async () => {
+    hostOf('AAA-11')
+    mockRoom = votingRoom({ expiresAt: new Date(Date.now() - 1_000) })
+    expect((await requeue(req(), ctx('AAA-11'))).status).toBe(410)
   })
 
   it('400 when there are no valid streaming services', async () => {

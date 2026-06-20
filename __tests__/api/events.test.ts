@@ -8,11 +8,16 @@ import { POST } from '@/app/api/events/route'
 import { prisma } from '@/lib/prisma'
 import { auth } from '@/auth'
 import { __resetRateLimit } from '@/lib/rate-limit'
+import { checkRateLimit } from '@/lib/rate-limit-db'
 
 jest.mock('@/lib/prisma', () => ({
   prisma: { event: { createMany: jest.fn(async () => ({ count: 0 })) } },
 }))
 jest.mock('@/auth', () => ({ auth: jest.fn(async () => null) }))
+jest.mock('@/lib/rate-limit-db', () => ({
+  ...jest.requireActual('@/lib/rate-limit-db'),
+  checkRateLimit: jest.fn(async () => ({ ok: true, retryAfterSeconds: 0 })),
+}))
 
 const createMany = prisma.event.createMany as jest.Mock
 const mockAuth = auth as unknown as jest.Mock
@@ -30,6 +35,7 @@ beforeEach(() => {
   createMany.mockClear()
   mockAuth.mockResolvedValue(null)
   __resetRateLimit()
+  ;(checkRateLimit as jest.Mock).mockResolvedValue({ ok: true, retryAfterSeconds: 0 })
 })
 
 test('persists allowlisted events and stamps null userId when anonymous', async () => {
@@ -80,4 +86,11 @@ test('returns 429 when rate-limited', async () => {
   let last = 204
   for (let i = 0; i < 40; i++) last = (await post({ anonId: 'flood', events: many })).status
   expect(last).toBe(429)
+})
+
+test('returns 429 when the durable global limit is exceeded', async () => {
+  ;(checkRateLimit as jest.Mock).mockResolvedValueOnce({ ok: false, retryAfterSeconds: 5 })
+  const res = await post({ anonId: 'a1', events: [{ type: 'page_view' }] })
+  expect(res.status).toBe(429)
+  expect(createMany).not.toHaveBeenCalled()
 })

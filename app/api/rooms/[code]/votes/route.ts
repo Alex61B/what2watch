@@ -5,6 +5,8 @@ import { checkForMatch } from '@/lib/match'
 import { getMovieById } from '@/lib/tmdb'
 import { resolveMemberUserId } from '@/lib/link'
 import { addPreference } from '@/lib/preferences'
+import { roomExpired, expiredRoomResponse } from '@/lib/room'
+import { logServerError, serverError } from '@/lib/api-error'
 
 export async function POST(
   request: Request,
@@ -38,6 +40,7 @@ export async function POST(
     if (!room || room.id !== member.roomId) {
       return NextResponse.json({ error: 'Room not found' }, { status: 404 })
     }
+    if (roomExpired(room)) return expiredRoomResponse()
     if (room.status !== 'VOTING') {
       return NextResponse.json({ error: 'Room is not in voting state' }, { status: 409 })
     }
@@ -117,17 +120,7 @@ export async function POST(
 
     return NextResponse.json({ matched: true, movie: matchedMovie })
   } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err))
-    console.error('[votes] fatal error', {
-      stage,
-      roomCode,
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-    })
-    return NextResponse.json(
-      { error: error.message, stack: error.stack, name: error.name, stage },
-      { status: 500 }
-    )
+    logServerError('[votes]', { stage, roomCode }, err)
+    return serverError(500)
   }
 }

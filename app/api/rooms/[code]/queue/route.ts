@@ -3,6 +3,8 @@ import { prisma } from '@/lib/prisma'
 import { getSessionToken } from '@/lib/session'
 import { getMovieById } from '@/lib/tmdb'
 import { buildRoomSignal, pickNext, scoreCandidate, type Candidate } from '@/lib/recommender'
+import { roomExpired, expiredRoomResponse } from '@/lib/room'
+import { logServerError, serverError } from '@/lib/api-error'
 
 // card_decided events carry the room CODE (not id) and no memberId, so dwell aggregates per
 // (code, movieId) over YES events only (matches the YES-only dwell weighting). A miss → empty
@@ -57,6 +59,7 @@ export async function GET(
     if (!room || room.id !== member.roomId) {
       return NextResponse.json({ error: 'Room not found' }, { status: 404 })
     }
+    if (roomExpired(room)) return expiredRoomResponse()
 
     stage = 'heartbeat'
     await prisma.member.update({ where: { id: member.id }, data: { lastSeenAt: new Date() } })
@@ -170,17 +173,7 @@ export async function GET(
       pickedBy,
     })
   } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err))
-    console.error('[queue-route] fatal error', {
-      stage,
-      roomCode,
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-    })
-    return NextResponse.json(
-      { error: error.message, stack: error.stack, name: error.name, stage },
-      { status: 500 }
-    )
+    logServerError('[queue-route]', { stage, roomCode }, err)
+    return serverError(500)
   }
 }

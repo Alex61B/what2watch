@@ -2,10 +2,10 @@
  * @jest-environment node
  *
  * Route tests for POST /api/rooms/[code]/start — host-only lobby → voting.
- * Covers the host/state/member-count/service guards, the no-movies 422, the happy
- * path that builds the shared room queue + a per-member queue, and the non-fatal
- * "save host prefs" hook. discoverMovies / auth are mocked; assertions check the
- * persisted shapes rather than the (random) shuffle order.
+ * Covers the host/state/member-count/service guards, the expiry guard, the no-movies
+ * 422, the happy path that builds the shared room queue, and the non-fatal "save host
+ * prefs" hook. discoverMovies / auth are mocked; assertions check the persisted shapes
+ * rather than the (random) shuffle order.
  */
 import { POST as start } from '@/app/api/rooms/[code]/start/route'
 import { prisma } from '@/lib/prisma'
@@ -18,7 +18,6 @@ jest.mock('@/lib/prisma', () => ({
     member: { findUnique: jest.fn() },
     room: { findUnique: jest.fn(), update: jest.fn(async () => ({})) },
     roomQueue: { createMany: jest.fn(async () => ({ count: 0 })) },
-    memberQueue: { createMany: jest.fn(async () => ({ count: 0 })) },
     user: { update: jest.fn(async () => ({})) },
     $transaction: jest.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
   },
@@ -44,7 +43,6 @@ const memberFindUnique = prisma.member.findUnique as jest.Mock
 const roomFindUnique = prisma.room.findUnique as jest.Mock
 const roomUpdate = prisma.room.update as jest.Mock
 const queueCreateMany = prisma.roomQueue.createMany as jest.Mock
-const memberQueueCreateMany = prisma.memberQueue.createMany as jest.Mock
 const userUpdate = prisma.user.update as jest.Mock
 const mockDiscover = discoverMovies as jest.Mock
 const mockAuth = auth as unknown as jest.Mock
@@ -64,6 +62,7 @@ function lobbyRoom(over: Record<string, unknown> = {}) {
     streamingServices: ['netflix'],
     filters: {},
     members: [{ id: 'm1', leftAt: null }, { id: 'm2', leftAt: null }],
+    expiresAt: new Date(Date.now() + 3_600_000),
     ...over,
   }
 }
@@ -77,8 +76,6 @@ beforeEach(() => {
   roomUpdate.mockResolvedValue({})
   queueCreateMany.mockReset()
   queueCreateMany.mockResolvedValue({ count: 0 })
-  memberQueueCreateMany.mockReset()
-  memberQueueCreateMany.mockResolvedValue({ count: 0 })
   userUpdate.mockReset()
   userUpdate.mockResolvedValue({})
   mockDiscover.mockReset()
@@ -109,6 +106,12 @@ describe('POST /start', () => {
     expect((await start(req(), ctx('AAA-11'))).status).toBe(409)
   })
 
+  it('410 when the room has expired', async () => {
+    hostOf('AAA-11')
+    roomFindUnique.mockResolvedValue(lobbyRoom({ expiresAt: new Date(Date.now() - 1_000) }))
+    expect((await start(req(), ctx('AAA-11'))).status).toBe(410)
+  })
+
   it('400 with fewer than 2 active members', async () => {
     hostOf('AAA-11')
     roomFindUnique.mockResolvedValue(lobbyRoom({ members: [{ id: 'm1', leftAt: null }] }))
@@ -135,7 +138,7 @@ describe('POST /start', () => {
     expect((await start(req(), ctx('AAA-11'))).status).toBe(422)
   })
 
-  it('builds the shared queue + a per-member queue and returns queueSize', async () => {
+  it('builds the shared room queue and returns queueSize', async () => {
     hostOf('AAA-11')
     roomFindUnique.mockResolvedValue(lobbyRoom()) // 2 members
     mockDiscover.mockResolvedValue(movies(['a', 'b', 'c']))
@@ -149,10 +152,6 @@ describe('POST /start', () => {
     const rq = queueCreateMany.mock.calls[0][0] as { data: { tmdbMovieId: string; position: number }[] }
     expect(rq.data.map((d) => d.position).sort((x, y) => x - y)).toEqual([0, 1, 2])
     expect(new Set(rq.data.map((d) => d.tmdbMovieId))).toEqual(new Set(['a', 'b', 'c']))
-    // per-member queue: 2 members × 3 movies = 6 rows
-    const mq = memberQueueCreateMany.mock.calls[0][0] as { data: { memberId: string }[] }
-    expect(mq.data).toHaveLength(6)
-    expect(new Set(mq.data.map((d) => d.memberId))).toEqual(new Set(['m1', 'm2']))
   })
 
   it('saves the host service/filter prefs when signed in', async () => {

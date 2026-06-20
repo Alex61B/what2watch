@@ -20,11 +20,13 @@ interface RoomState {
   members: RoomMember[];
   isCurrentUserHost: boolean;
   currentMemberId: string | null;
+  expired?: boolean;
 }
 
 interface PollResponse {
   status: string;
   memberCount: number;
+  expired?: boolean;
 }
 
 const EYEBROW = "text-[11px] font-semibold uppercase tracking-[0.18em] text-faint";
@@ -71,6 +73,10 @@ export default function LobbyPage() {
           return;
         }
         const data: RoomState = await res.json();
+        if (data.expired) {
+          setLoadError("This room has expired.");
+          return;
+        }
         setRoom(data);
         setMemberCount(data.members.length);
         setJoined(data.currentMemberId !== null);
@@ -92,6 +98,10 @@ export default function LobbyPage() {
         const res = await fetch(`/api/rooms/${code}/poll`, { cache: "no-store" });
         if (!res.ok) return;
         const data: PollResponse = await res.json();
+        if (data.expired) {
+          setLoadError("This room has expired.");
+          return;
+        }
         setMemberCount(data.memberCount);
         handleRedirect(data.status);
       } catch {

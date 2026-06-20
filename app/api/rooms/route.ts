@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { generateRoomCode, isValidRoomCode } from '@/lib/room-code'
 import { generateSessionToken, setSessionCookie } from '@/lib/session'
+import { checkRateLimit, getClientIp, RATE_LIMITS, tooManyRequests } from '@/lib/rate-limit-db'
 
 // Normalize an optional free-text room name: trim, empty → null, cap length.
 function normalizeRoomName(raw: unknown): string | null {
@@ -12,6 +13,9 @@ function normalizeRoomName(raw: unknown): string | null {
 }
 
 export async function POST(request: Request) {
+  const rl = await checkRateLimit('room-create', getClientIp(request), RATE_LIMITS.roomCreate)
+  if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds)
+
   const body = await request.json()
   const displayName = body?.displayName
   const name = normalizeRoomName(body?.name)

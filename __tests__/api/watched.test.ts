@@ -12,7 +12,8 @@ import { resolveMemberUserId } from '@/lib/link'
 import { sessionCookieName } from '@/lib/session'
 
 interface Member { id: string; roomId: string; sessionToken: string; userId: string | null }
-interface Room { id: string; code: string; watchedFilter: boolean }
+interface Room { id: string; code: string; watchedFilter: boolean; expiresAt: Date }
+const FUTURE = () => new Date(Date.now() + 3_600_000)
 
 let mockMember: Member | null = null
 let mockRoom: Room | null = null
@@ -79,21 +80,21 @@ describe('POST /watched', () => {
 
   it('404 when the room does not belong to the member', async () => {
     authAs('AAA-11')
-    mockRoom = { id: 'rX', code: 'AAA-11', watchedFilter: false }
+    mockRoom = { id: 'rX', code: 'AAA-11', watchedFilter: false, expiresAt: FUTURE() }
     const res = await markWatched(req({ tmdbMovieId: '10' }), ctx('AAA-11'))
     expect(res.status).toBe(404)
   })
 
   it('400 when tmdbMovieId is missing', async () => {
     authAs('AAA-11')
-    mockRoom = { id: 'r1', code: 'AAA-11', watchedFilter: false }
+    mockRoom = { id: 'r1', code: 'AAA-11', watchedFilter: false, expiresAt: FUTURE() }
     const res = await markWatched(req({}), ctx('AAA-11'))
     expect(res.status).toBe(400)
   })
 
   it('skip-reruns OFF: records the seen flag and returns ok', async () => {
     authAs('AAA-11')
-    mockRoom = { id: 'r1', code: 'AAA-11', watchedFilter: false }
+    mockRoom = { id: 'r1', code: 'AAA-11', watchedFilter: false, expiresAt: FUTURE() }
     const res = await markWatched(req({ tmdbMovieId: '10' }), ctx('AAA-11'))
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true })
@@ -102,7 +103,7 @@ describe('POST /watched', () => {
 
   it('skip-reruns ON: records the seen flag (removal handled by /queue, no shared advance)', async () => {
     authAs('AAA-11')
-    mockRoom = { id: 'r1', code: 'AAA-11', watchedFilter: true }
+    mockRoom = { id: 'r1', code: 'AAA-11', watchedFilter: true, expiresAt: FUTURE() }
     const res = await markWatched(req({ tmdbMovieId: '10' }), ctx('AAA-11'))
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true })
@@ -111,7 +112,7 @@ describe('POST /watched', () => {
 
   it('still succeeds (200) when the SEEN_BEFORE hook throws', async () => {
     authAs('AAA-11')
-    mockRoom = { id: 'r1', code: 'AAA-11', watchedFilter: false }
+    mockRoom = { id: 'r1', code: 'AAA-11', watchedFilter: false, expiresAt: FUTURE() }
     mockResolve.mockRejectedValueOnce(new Error('hook boom'))
     const res = await markWatched(req({ tmdbMovieId: '10' }), ctx('AAA-11'))
     expect(res.status).toBe(200)

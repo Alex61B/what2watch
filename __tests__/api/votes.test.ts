@@ -13,7 +13,7 @@ import { getMovieById } from '@/lib/tmdb'
 import { sessionCookieName } from '@/lib/session'
 
 interface Member { id: string; roomId: string; sessionToken: string; leftAt: Date | null; approved: boolean; userId: string | null }
-interface Room { id: string; code: string; status: string; currentPosition: number; queueVersion: number }
+interface Room { id: string; code: string; status: string; currentPosition: number; queueVersion: number; expiresAt: Date }
 
 let mockMember: Member | null = null
 let mockRoom: Room | null = null
@@ -74,7 +74,7 @@ function authAs(code: string, over: Partial<Member> = {}) {
 
 beforeEach(() => {
   mockMember = null
-  mockRoom = { id: 'r1', code: 'AAA-11', status: 'VOTING', currentPosition: 2, queueVersion: 7 }
+  mockRoom = { id: 'r1', code: 'AAA-11', status: 'VOTING', currentPosition: 2, queueVersion: 7, expiresAt: new Date(Date.now() + 3_600_000) }
   mockQueueEntry = { tmdbMovieId: '10', watchUrl: 'http://w', streamingService: 'netflix' }
   mockVoteUpsert.mockClear()
   mockMatch.mockReset()
@@ -95,8 +95,30 @@ describe('POST /votes', () => {
 
   it('409 when the room is not in voting state', async () => {
     authAs('AAA-11')
-    mockRoom = { id: 'r1', code: 'AAA-11', status: 'MATCHED', currentPosition: 2, queueVersion: 7 }
+    mockRoom = { id: 'r1', code: 'AAA-11', status: 'MATCHED', currentPosition: 2, queueVersion: 7, expiresAt: new Date(Date.now() + 3_600_000) }
     expect((await castVote(req({ tmdbMovieId: '10', vote: true }), ctx('AAA-11'))).status).toBe(409)
+  })
+
+  it('410 when the room has expired', async () => {
+    authAs('AAA-11')
+    mockRoom!.expiresAt = new Date(Date.now() - 1_000)
+    const res = await castVote(req({ tmdbMovieId: '10', vote: true }), ctx('AAA-11'))
+    expect(res.status).toBe(410)
+    expect(mockVoteUpsert).not.toHaveBeenCalled()
+  })
+
+  it('500 on an unexpected error returns a generic body with no internals leaked', async () => {
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {})
+    authAs('AAA-11')
+    mockVoteUpsert.mockImplementationOnce(async () => {
+      throw new Error('db boom at db.internal.host')
+    })
+    const res = await castVote(req({ tmdbMovieId: '10', vote: true }), ctx('AAA-11'))
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body).toEqual({ error: 'Internal server error' })
+    expect(JSON.stringify(body)).not.toMatch(/stack|stage|db boom|db\.internal/i)
+    spy.mockRestore()
   })
 
   it('400 when the vote field is not a boolean', async () => {

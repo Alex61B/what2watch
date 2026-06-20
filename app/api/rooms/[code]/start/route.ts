@@ -3,6 +3,8 @@ import { prisma } from '@/lib/prisma'
 import { getSessionToken } from '@/lib/session'
 import { auth } from '@/auth'
 import { discoverMovies, STREAMING_SERVICES, type ServiceId } from '@/lib/tmdb'
+import { roomExpired, expiredRoomResponse } from '@/lib/room'
+import { logServerError, serverError } from '@/lib/api-error'
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr]
@@ -45,6 +47,7 @@ export async function POST(
     if (!room || room.id !== member.roomId) {
       return NextResponse.json({ error: 'Room not found' }, { status: 404 })
     }
+    if (roomExpired(room)) return expiredRoomResponse()
     if (room.status !== 'LOBBY') {
       return NextResponse.json({ error: 'Room has already started' }, { status: 409 })
     }
@@ -95,19 +98,6 @@ export async function POST(
       }),
     ])
 
-    stage = 'member-queues'
-    const movieIds = shuffled.map(m => m.tmdbId)
-    const memberQueueRows = room.members.flatMap(m =>
-      shuffle([...movieIds]).map((tmdbMovieId, position) => ({
-        memberId: m.id,
-        tmdbMovieId,
-        position,
-      }))
-    )
-    if (memberQueueRows.length > 0) {
-      await prisma.memberQueue.createMany({ data: memberQueueRows, skipDuplicates: true })
-    }
-
     stage = 'save-prefs'
     try {
       const session = await auth()
@@ -129,22 +119,7 @@ export async function POST(
 
     return NextResponse.json({ queueSize: shuffled.length })
   } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err))
-    console.error('[start] fatal error', {
-      stage,
-      roomCode,
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-    })
-    return NextResponse.json(
-      {
-        error: error.message,
-        stack: error.stack,
-        name: error.name,
-        stage,
-      },
-      { status: 500 }
-    )
+    logServerError('[start]', { stage, roomCode }, err)
+    return serverError(500)
   }
 }
