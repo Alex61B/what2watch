@@ -5,7 +5,7 @@
  * mocked; we assert the allow/deny decision, Retry-After, IP parsing, and the
  * fail-open behavior (a limiter outage must not take down signup/join).
  */
-import { checkRateLimit, getClientIp } from '@/lib/rate-limit-db'
+import { checkRateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit-db'
 import { prisma } from '@/lib/prisma'
 
 jest.mock('@/lib/prisma', () => ({ prisma: { $queryRaw: jest.fn() } }))
@@ -46,11 +46,25 @@ describe('checkRateLimit', () => {
     expect(res.retryAfterSeconds).toBeGreaterThan(0)
   })
 
-  it('fails open if the limiter query throws (availability over strictness)', async () => {
+  it('fails open by default if the limiter query throws (availability over strictness)', async () => {
     const spy = jest.spyOn(console, 'error').mockImplementation(() => {})
     queryRaw.mockRejectedValueOnce(new Error('db down'))
-    const res = await checkRateLimit('signup', 'ip:1.2.3.4', opts)
+    const res = await checkRateLimit('events', 'ip:1.2.3.4', opts)
     expect(res.ok).toBe(true)
     spy.mockRestore()
+  })
+
+  it('fails CLOSED with a positive Retry-After when failClosed and the query throws (H2)', async () => {
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {})
+    queryRaw.mockRejectedValueOnce(new Error('db down'))
+    const res = await checkRateLimit('login', 'ip:1.2.3.4', { ...opts, failClosed: true })
+    expect(res.ok).toBe(false)
+    expect(res.retryAfterSeconds).toBeGreaterThan(0)
+    spy.mockRestore()
+  })
+
+  it('configures the auth scopes (signup, login) as fail-closed', () => {
+    expect(RATE_LIMITS.signup.failClosed).toBe(true)
+    expect(RATE_LIMITS.login.failClosed).toBe(true)
   })
 })

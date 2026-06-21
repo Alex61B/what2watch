@@ -2,7 +2,10 @@
 import { prisma } from '@/lib/prisma'
 
 export type FriendErrorCode =
-  | 'SELF' | 'USER_NOT_FOUND' | 'DUPLICATE' | 'ALREADY_FRIENDS' | 'NOT_FOUND' | 'NOT_PENDING'
+  | 'SELF' | 'USER_NOT_FOUND' | 'DUPLICATE' | 'ALREADY_FRIENDS' | 'NOT_FOUND' | 'NOT_PENDING' | 'COOLDOWN'
+
+/** A DECLINED request can only be re-opened after this window — bounds decline/re-send harassment. */
+export const DECLINED_COOLDOWN_MS = 24 * 60 * 60 * 1000
 
 export class FriendError extends Error {
   code: FriendErrorCode
@@ -26,7 +29,7 @@ const eitherDirection = (a: string, b: string) => ({
   ],
 })
 
-export async function sendFriendRequest(requesterId: string, receiverId: string) {
+export async function sendFriendRequest(requesterId: string, receiverId: string, now: number = Date.now()) {
   if (requesterId === receiverId) throw new FriendError('SELF')
 
   const receiver = await prisma.user.findUnique({ where: { id: receiverId } })
@@ -36,7 +39,9 @@ export async function sendFriendRequest(requesterId: string, receiverId: string)
   if (existing) {
     if (existing.status === 'ACCEPTED') throw new FriendError('ALREADY_FRIENDS')
     if (existing.status === 'PENDING') throw new FriendError('DUPLICATE')
-    // DECLINED — re-open in the new direction
+    // DECLINED — re-open in the new direction, but only after the cooldown so a declined
+    // requester can't immediately re-spam the person who declined them.
+    if (now - existing.updatedAt.getTime() < DECLINED_COOLDOWN_MS) throw new FriendError('COOLDOWN')
     return prisma.friendship.update({
       where: { id: existing.id },
       data: { requesterId, receiverId, status: 'PENDING' },

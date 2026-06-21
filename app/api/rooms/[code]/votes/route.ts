@@ -6,6 +6,7 @@ import { getMovieById } from '@/lib/tmdb'
 import { resolveMemberUserId } from '@/lib/link'
 import { addPreference } from '@/lib/preferences'
 import { roomExpired, expiredRoomResponse } from '@/lib/room'
+import { checkRateLimit, RATE_LIMITS, tooManyRequests } from '@/lib/rate-limit-db'
 import { logServerError, serverError } from '@/lib/api-error'
 
 export async function POST(
@@ -35,6 +36,11 @@ export async function POST(
       return NextResponse.json({ error: 'You are not an approved member of this room' }, { status: 403 })
     }
 
+    // M-vote: per-member throttle (generous — sustained swipe-voting stays well under the cap).
+    stage = 'rate-limit'
+    const rl = await checkRateLimit('vote', member.id, RATE_LIMITS.vote)
+    if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds)
+
     stage = 'room-lookup'
     const room = await prisma.room.findUnique({ where: { code } })
     if (!room || room.id !== member.roomId) {
@@ -48,7 +54,9 @@ export async function POST(
     stage = 'body-parse'
     const body = await request.json().catch(() => ({}))
     const { tmdbMovieId, vote } = body
-    if (!tmdbMovieId || typeof vote !== 'boolean') {
+    // M-vote: require a string id (not merely truthy) so a number/object can't slip into the
+    // composite key lookup or be persisted with the wrong type.
+    if (typeof tmdbMovieId !== 'string' || typeof vote !== 'boolean') {
       return NextResponse.json(
         { error: 'tmdbMovieId (string) and vote (boolean) are required' },
         { status: 400 }

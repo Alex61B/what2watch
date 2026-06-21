@@ -2,6 +2,30 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-21 — WP1a: Abuse & rate-limit hardening (limiter core)
+
+**Prompt (summary):** Continue the production-readiness audit from `docs/session-handoff-2026-06-21.md`;
+user chose **WP1**. Split per OQ5 into **WP1a (limiter core)** this cycle: close H1 (login throttle),
+H2 (limiter fail-closed for auth scopes), H3 (events ingest forgery), and the abuse M-set — member
+cap, vote type-guard + throttle, friend-request throttle + DECLINED cooldown. WP1b (room-code/roster
+restriction, user-search enumeration) deferred to a follow-up with direction recorded.
+
+**Approach:** Everything reuses the existing durable limiter `lib/rate-limit-db.ts` — new scopes
+(`login`, `vote`, `friendRequest`) + a per-scope `failClosed` flag (signup/login deny on limiter-DB
+error; events stay fail-open — safe because auth already needs the DB). **H1:** wrapped the NextAuth
+`POST` in `app/api/auth/[...nextauth]/route.ts` (user-approved restricted edit) to IP-throttle only the
+`/callback/credentials` path before bcrypt — no body read, no `auth.ts` change. Research corrected
+H2's "spoofable XFF" half as platform-mitigated (Vercel overwrites `x-forwarded-for` at the edge).
+**H3:** re-keyed the durable events cap on IP (rotating `anonId` no longer bypasses) + bounded
+`roomId`/`memberId` to ≤64 chars. **M-set:** `MAX_ROOM_MEMBERS=20` counted inside the join
+transaction → 409; `typeof tmdbMovieId==='string'` + per-member 120/min vote throttle; per-user
+20/hr friend-request limit + 24h DECLINED re-open cooldown (via `Friendship.updatedAt`). No schema
+change, no new dependency. Research/plan in `docs/research.md` + `docs/plan-wp1a-rate-limit-hardening.md`.
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + **297 Jest tests** (48 suites, +13
+new), drift-free. New/extended tests: login-throttle (3), member-cap (2), fail-closed limiter (2),
+events IP-key + id-bound (2), vote type-guard + throttle (2), DECLINED cooldown (2), signup fail-closed scope (1).
+
 ## 2026-06-18 — M1: Operational Floor (production hardening)
 
 **Prompt (summary):** After an architecture review of the next improvement milestones,

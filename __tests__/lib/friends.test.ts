@@ -1,7 +1,8 @@
 // __tests__/lib/friends.test.ts
 import {
-  FriendError, sendFriendRequest, respondToRequest, removeFriend, areFriends,
+  sendFriendRequest, respondToRequest, removeFriend, areFriends,
   listFriends, searchUsers, getSharedWatchlist, getSessionsTogether, getSharedYesInSession,
+  DECLINED_COOLDOWN_MS,
 } from '@/lib/friends'
 import { prisma } from '@/lib/prisma'
 
@@ -47,12 +48,21 @@ describe('friends', () => {
     await expect(sendFriendRequest('a', 'b')).rejects.toMatchObject({ code: 'ALREADY_FRIENDS' })
   })
 
-  it('sendFriendRequest re-opens a DECLINED row in the new direction', async () => {
+  it('sendFriendRequest re-opens a DECLINED row in the new direction once the cooldown has elapsed', async () => {
     u.findUnique.mockResolvedValueOnce({ id: 'b' })
-    f.findFirst.mockResolvedValueOnce({ id: 'r1', requesterId: 'b', receiverId: 'a', status: 'DECLINED' })
+    const declinedAt = new Date('2026-01-01T00:00:00Z')
+    f.findFirst.mockResolvedValueOnce({ id: 'r1', requesterId: 'b', receiverId: 'a', status: 'DECLINED', updatedAt: declinedAt })
     f.update.mockResolvedValueOnce({})
-    await sendFriendRequest('a', 'b')
+    await sendFriendRequest('a', 'b', declinedAt.getTime() + DECLINED_COOLDOWN_MS + 1)
     expect(f.update).toHaveBeenCalledWith({ where: { id: 'r1' }, data: { requesterId: 'a', receiverId: 'b', status: 'PENDING' } })
+  })
+
+  it('sendFriendRequest throws COOLDOWN when re-opening a DECLINED row too soon (M-friend)', async () => {
+    u.findUnique.mockResolvedValueOnce({ id: 'b' })
+    const declinedAt = new Date('2026-01-01T00:00:00Z')
+    f.findFirst.mockResolvedValueOnce({ id: 'r1', requesterId: 'b', receiverId: 'a', status: 'DECLINED', updatedAt: declinedAt })
+    await expect(sendFriendRequest('a', 'b', declinedAt.getTime() + 1_000)).rejects.toMatchObject({ code: 'COOLDOWN' })
+    expect(f.update).not.toHaveBeenCalled()
   })
 
   it('sendFriendRequest creates a new pending request when none exists', async () => {

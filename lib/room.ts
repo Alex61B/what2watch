@@ -4,6 +4,12 @@
 // the rule lives in one place instead of being duplicated (or forgotten) per route.
 import { NextResponse } from 'next/server'
 
+/**
+ * Max active (not-left) members per room. Enforced atomically inside the join transaction
+ * (app/api/rooms/[code]/members/route.ts) so concurrent joins can't both slip past the cap.
+ */
+export const MAX_ROOM_MEMBERS = 20
+
 /** True once a room is past its expiry. */
 export function roomExpired(room: { expiresAt: Date }): boolean {
   return room.expiresAt.getTime() < Date.now()
