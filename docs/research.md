@@ -1,127 +1,154 @@
-# Research — WP1: Abuse & Rate-Limit Hardening
+# Research — WP1b: Enumeration / UX Hardening
 
-> Cycle: WP1 of the 2026-06-21 production-readiness audit. Closes audit findings **H1, H2, H3**
-> and the abuse-related **M-set** (room-code enumeration / unauth roster, user-search enumeration,
-> unauth-join member cap, vote type-confusion + throttle, friend-request spam + DECLINED reopen).
-> Read-only audit confirmed every finding against current `HEAD` (`5a97134`).
+> Follow-up to WP1a (limiter core, PR #22). Closes the remaining half of WP1 from the
+> 2026-06-21 production-readiness audit: **M1** (room-roster GET over-exposure) and **M2**
+> (user-search enumeration + email exposure). Direction was pre-decided with the user on
+> 2026-06-21 (recorded in the WP1a research as OQ1/OQ2). **Migration-free, dependency-free.**
+
+---
 
 ## 1. Requirements Summary
 
-Make the abuse-exposed surfaces resistant to brute-force, forgery, enumeration, and spam **without
-breaking legitimate UX** (rapid swipe-voting, the pre-join lobby view, friend search). Concretely:
+Two information-disclosure / enumeration findings, both reusing the existing durable limiter
+`lib/rate-limit-db.ts` (no new infra, no schema change, no auth change).
 
-| ID | Finding (confirmed against code) | Target behavior |
-|----|----------------------------------|-----------------|
-| **H1** | Login has **no throttle/lockout**. Credentials flow runs `bcrypt.compare` per attempt with no cap (`auth.ts:40-52`; POST handled by `app/api/auth/[...nextauth]/route.ts:1-2`). | Throttle the credentials callback by client IP (fixed window) → 429 before bcrypt. |
-| **H2** | Durable limiter **fails OPEN** on any DB error (`lib/rate-limit-db.ts:59-65`); IP taken from leftmost `x-forwarded-for` (`:29-33`). | **Fail CLOSED for auth scopes** (login/signup); keep fail-open for best-effort `events`. IP-trust: see §3 — the leftmost-XFF half is **platform-mitigated**, fix is optional defense-in-depth. |
-| **H3** | Events ingest durable cap is keyed on **client-supplied `anonId`** (`app/api/events/route.ts:30,36`) → rotate `anonId` to bypass; `roomId`/`memberId` stored unbounded (`:68-69`) and `roomId`(=code) feeds the recommender dwell signal (`queue/route.ts:12-32,126-133`). | Key the durable cap on **IP** (rotation-proof); bound `roomId`/`memberId` length. (Ranking-influence is already bounded — see §4.) |
-| **M-code** | `generateRoomCode` = 100 adjectives × 90 two-digit = **9,000 combos** (`lib/room-code.ts:14-18`); roster GET is **unauthenticated** and returns members, `lastSeenAt`, name, status, matched movie to anyone with a code (`app/api/rooms/[code]/route.ts:7-60`). | Decision pending (§5 OQ1): raise entropy and/or trim non-member fields and/or rate-limit the GET. |
-| **M-search** | `searchUsers` does `contains` (substring) on **email + displayName** with **no min length**, returns **email** in output (`lib/friends.ts:96-110`); route only requires auth (`app/api/users/search/route.ts`). 1-char query enumerates the user table + emails. | Decision pending (§5 OQ2): min query length, exact-email match, drop/mask email, rate-limit. |
-| **M-join** | Room join has an IP rate-limit but **no member cap** (`app/api/rooms/[code]/members/route.ts`). Unbounded members per room. | Add a max-active-members check **inside the existing join transaction**. |
-| **M-vote** | Vote accepts `tmdbMovieId` with only a truthy check — **no `typeof` guard** (`app/api/rooms/[code]/votes/route.ts:50-51`); no throttle. | Add `typeof tmdbMovieId === 'string'`; add a **per-member** throttle generous enough for swipe-voting. |
-| **M-friend** | `sendFriendRequest` **re-opens a DECLINED** friendship in the new direction (`lib/friends.ts:39-43`) → declined user can re-spam; request route has **no rate-limit** (`app/api/friends/requests/route.ts`). | Rate-limit the request route; change DECLINED handling (§5 OQ4: hard-block vs cooldown). |
+**M1 — Unauthenticated room-roster GET (`GET /api/rooms/[code]`) over-exposes room state.**
+Today the GET is fully unauthenticated and returns the **full** room state to anyone who knows
+(or guesses) a code: the member roster (`id`, `displayName`, `isHost`, `lastSeenAt`), the matched
+movie (incl. `watchUrl`/`streamingService`), and all room config (`streamingServices`, `filters`,
+`watchedFilter`). Room codes are short and guessable (`ADJECTIVE-DD` = 100 × 90 = 9 000 combos,
+`lib/room-code.ts`), so this is enumerable.
+- **Decided (OQ1):** the unauthenticated/non-member response is restricted to **existence + room
+  `name` + `status`** (plus `expired`, and the already-session-gated `currentMemberId`/
+  `isCurrentUserHost`, which are `null`/`false` for non-members). `members`, `lastSeenAt`,
+  `matchedMovie`, and room config become **members-only** (caller must hold a valid per-room
+  session for that room). **Keep the short shareable code** — do not lengthen it.
+- **Decided (OQ1):** add an **IP rate-limit** on the GET to throttle enumeration.
+
+**M2 — User search (`GET /api/users/search` → `lib/friends.ts#searchUsers`) enables enumeration
+and leaks email.** Today `searchUsers` substring-matches **both** `displayName` **and** `email`
+(case-insensitive `contains`) on any non-empty query and returns `email` in the payload;
+`components/FriendsClient.tsx` renders that email under every result. A single-character query
+returns a broad slice of the user table, and email substring match turns the box into an
+address-harvesting tool.
+- **Decided (OQ2):** `displayName` **substring** match requires a **minimum of 2 characters**;
+  `email` matches **exactly** (case-insensitive `equals`, not `contains`). **Drop `email` from the
+  search response** and stop rendering it in `FriendsClient`. Add a **`userSearch` rate-limit**.
+
+**Why now:** both are pre-launch hardening items (audit M1/M2). They are independent of WP1a but
+share `lib/friends.ts` (WP1a added the friend-request cooldown there), which is why this branch is
+stacked on the WP1a tip.
+
+---
 
 ## 2. Stack Choices (reuse existing patterns — no new dependencies)
 
-- **Durable limiter** `lib/rate-limit-db.ts` — Postgres `RateLimit` table, fixed-window, atomic
-  `INSERT … ON CONFLICT DO UPDATE … RETURNING count`. Already wired at signup/room-create/room-join/events.
-  Add new `RATE_LIMITS` entries (`login`, `vote`, `friendRequest`, `userSearch`) and a `failClosed?`
-  option to `checkRateLimit` (default `false`).
-- **In-memory fast-path** `lib/rate-limit.ts` — per-instance pre-DB blunt; reused as-is.
-- **429 helper** `tooManyRequests(retryAfterSeconds)` — reused.
-- **IP** `getClientIp` — reused (Vercel-overwritten XFF, see §3); optional `x-real-ip` fallback adds no dependency.
-- **Login throttle** — wrap the exported `POST` in `app/api/auth/[...nextauth]/route.ts`, gate **only**
-  the `…/callback/credentials` path, key on IP, **without reading the request body** (NextAuth needs the
-  stream). No change to `auth.ts`.
-- **Cleanup** — expired `RateLimit` rows already purged by `app/api/cron/cleanup/route.ts:41`; new scopes need no new sweep.
-- **Tests** — extend the existing jest suites (`__tests__/lib/rate-limit-db.test.ts`, `…/api/votes.test.ts`,
-  `…/api/events.test.ts`, `…/api/signup.test.ts`, `…/lib/friends.test.ts`, `…/lib/room-code.test.ts`). Baseline: 284/284 green.
+- **Rate limiting:** reuse `lib/rate-limit-db.ts` exactly as WP1a wired it. Add two scopes to
+  `RATE_LIMITS` and call `checkRateLimit(scope, identifier, RATE_LIMITS.x)` → `tooManyRequests(...)`.
+  - `roomGet`: **IP-keyed** (`getClientIp(request)`), **fail-open** (default) — best-effort
+    enumeration throttle; the lobby must still load on a limiter-DB hiccup. Proposed **60 / min / IP**
+    (legit callers fetch the GET a handful of times; polling uses `/poll`, not this route).
+  - `userSearch`: **per-authenticated-user**-keyed (`session.user.id`, mirroring `friendRequest`),
+    **fail-open**. Proposed **30 / min / user**.
+- **Membership check:** reuse the existing `getSessionToken(code)` + `prisma.member.findFirst({ where:
+  { sessionToken, roomId } })` already present in the GET handler — the gate is "did this browser
+  resolve to a member of *this* room". Keep the current `room.findUnique({ include: { members } })`
+  query shape (do **not** switch to `member.findMany`) so the existing `room-name.test.ts` prisma
+  mock — which implements `room.findUnique({include})` + `member.findFirst` but **not**
+  `member.findMany` — stays valid.
+- **Search query change:** Prisma `where` only — `email: { equals: q, mode: 'insensitive' }` and an
+  early `if (q.length < 2) return []`; narrow `select` to `{ id, displayName }`.
+- **Types:** keep `PublicUser { id, displayName, email }` for `listFriends` (accepted friends /
+  pending requests already have a relationship; email there is unrendered and out of M2's scope).
+  Give `searchUsers` a **narrower** return type (`{ id: string; displayName: string }`) so email
+  cannot leak through search. Mirror with a local result type in `FriendsClient`.
+
+---
 
 ## 3. Environment Verification
 
-- **Deploy target = Vercel.** Per Vercel request-headers docs: *"Vercel overwrites [`x-forwarded-for`]
-  and does not forward external IPs to prevent spoofing, unless a trusted proxy is enabled for Enterprise."*
-  The project is on **Hobby** → the header is **edge-controlled and not client-spoofable**. So the
-  "trusts spoofable leftmost XFF" half of **H2 is largely platform-mitigated**; the actionable H2 work is
-  the **fail-open→fail-closed (auth scopes)** change. Canonical helper `ipAddress()` lives in
-  `@vercel/functions`, which is **not installed** (adding it = a package install → restricted/approval).
-  We can get the same robustness with `x-real-ip` (Vercel-set) as a fallback, **no new dependency**.
-- **Fail-closed is safe for auth scopes:** login and signup already require the DB (user lookup / create).
-  If the limiter's DB query throws, the subsequent auth query would throw too — so failing the limiter
-  *closed* removes no availability that the outage hadn't already removed. (Events stay fail-open: best-effort telemetry.)
-- **RateLimit table + cron sweep** confirmed present and wired (`lib/rate-limit-db.ts`, `app/api/cron/cleanup/route.ts`).
-- **UI coupling:** `components/FriendsClient.tsx:7,39` defines `PublicUser { …; email }` and renders the
-  email under each search result — so any change to the search output shape touches the client component.
+- **Branch/state:** `feat/wp1b-enumeration-hardening` off the WP1a tip (`aa2a87a`); `.workflow_state`
+  = RESEARCH, `.workflow_failures` = 0. WP1a is in review as PR #22.
+- **Limiter is live:** `lib/rate-limit-db.ts` (Postgres-backed, cleanup cron) is in production after
+  WP1a; the `RateLimit` table + scope pattern already exist — adding scopes needs **no migration**.
+- **Verification command:** `bash scripts/verify.sh` (typecheck → lint → jest). Baseline on this
+  branch is **green: 296 tests / 47 suites** (the WP1a-on-main count).
+- **No `middleware.ts`** at the repo root — room pages are client-rendered and self-gate by fetching
+  room state, so a non-member *can* navigate to any `/room/[code]/*` route. Consumer audit below
+  accounts for this.
+- **`./node_modules/.bin/prisma` only** (bare `npx prisma` pulls v7). Not needed this cycle — no
+  schema change.
+
+---
 
 ## 4. Risks & Edge Cases
 
-- **Login throttle correctness:** must match only the credentials-callback sub-path of `[...nextauth]`,
-  never signout/session/csrf/Google-callback; must not consume the body. IP-only keying avoids both traps.
-- **Restricted area:** `app/api/auth/[...nextauth]/route.ts` is under `app/api/auth/` (auth/session →
-  restricted). Editing it needs **explicit user approval** (OQ3). `auth.ts` itself is **not** touched.
-- **Vote throttle vs swipe UX:** swipe-voting is intentionally rapid; the cap must be **per-member** and
-  generous (e.g. ≥1/sec sustained) so real users are never 429'd. Per-IP would punish multiple members on one network.
-- **Member cap race:** count active (`leftAt: null`) members **inside** the existing `$transaction` so two
-  concurrent joins can't both slip past the cap.
-- **Events IP-keying:** users behind shared NAT share the `events` cap; acceptable because the cap is high (240/min).
-- **Recommender-influence (H3) is already bounded:** `loadDwellByMovie` dwell only *weights* movies that
-  also have a **real `Vote` row** in that room (`queue/route.ts:127-133`). A forged `card_decided` event
-  with no matching real vote contributes nothing — so WP1 only needs to stop key-rotation + bound storage,
-  not redesign the recommender (that stays out of scope).
-- **Room-code entropy vs UX:** raising entropy lengthens the shareable code (printed links, "say it aloud"
-  UX). Restricting the roster GET to members breaks the **pre-join lobby preview**. → design decision, not a mechanical fix.
-- **User-search shape vs UX:** dropping email from results changes `FriendsClient`. Exact-email match means
-  you can only find someone by their *full* email or display-name substring. → design decision.
-- **DECLINED friend re-open:** a hard block traps users who legitimately reconcile; a cooldown is friendlier
-  but more code. → design decision.
+- **Lobby consumer breakage (highest risk).** `app/room/[code]/lobby/page.tsx` is the share-link
+  landing page hit by **non-members**, and it consumes the GET response **unconditionally** before
+  the user joins: `setMemberCount(data.members.length)` (line 81) and `room.streamingServices.length`
+  (line 218) both run for every caller. Dropping `members`/`streamingServices` from the non-member
+  payload would throw `TypeError` and brick the lobby. **Mitigation:** harden the lobby to treat
+  `members`/`streamingServices` as optional (`data.members?.length ?? 0`, `room.members ?? []`,
+  `room.streamingServices?.length`). After joining, the lobby re-fetches the GET **as a member**
+  (line 152) and receives the full payload, so the member list still renders post-join.
+- **Other GET consumers are already safe** (audited): `done/page.tsx` uses only `data.name ?? null`;
+  `setup/page.tsx` guards every field (`data.members ?? []`, `data.streamingServices ?? []`) **and**
+  redirects non-hosts to the lobby (`if (!data.isCurrentUserHost) return router.replace(.../lobby)`)
+  before touching members; `HostFilterEditor.tsx` runs only in an authenticated host context. No
+  changes needed in those three.
+- **Existing GET test stays green.** `__tests__/api/room-name.test.ts` exercises the GET **as a
+  member** (cookie set via `applyCookies`) and asserts `.name`; `name` is in both the minimal and
+  full payloads, and `checkRateLimit` is already mocked-ok there → passes unchanged (no edit needed).
+- **searchUsers test must be updated.** `__tests__/lib/friends.test.ts` asserts the *exact* `where`
+  (`email: { contains }`) and `select` (incl. `email`); M2 changes both, so this test is updated
+  in-scope (email `equals`, `select` drops `email`, add min-2-char cases).
+- **Rate-limit ordering.** Check the IP limit at the **top** of the GET (before `findUnique`) so
+  probing **non-existent** codes is also throttled — otherwise 404s are a free enumeration oracle.
+- **Shared-IP / NAT false positives.** 60/min/IP for `roomGet` is generous enough for households /
+  small offices behind one IP loading a few rooms; fail-open avoids hard outages. (Codes remain
+  guessable by design — OQ1 kept the short code; rate-limiting is the agreed mitigation, not secrecy.)
+- **Residual, out of scope:** `listFriends` (and thus `GET /api/friends`) still returns `email` for
+  accepted friends / pending requests in the JSON (unrendered). Lower risk (requires an existing
+  relationship, not open enumeration); noted, not addressed this cycle.
+- **No new fail-closed scopes** — both new scopes are fail-open; neither is an auth/brute-force
+  vector, and availability of lobby/search is preferred on a limiter outage.
+
+---
 
 ## 5. Assumptions & Open Questions
 
-**Assumptions:** no new npm dependencies (everything reuses `lib/rate-limit*`); migrations untouched
-(`RateLimit` table already exists); `auth.ts` untouched; verification stays `scripts/verify.sh`.
+Direction was pre-decided (OQ1/OQ2), so the genuine unknowns are just tunable constants:
 
-**Open questions (resolve before PLAN — they shape the manifest):**
+- **A1:** Non-member room payload = `{ code, name, status, expired, currentMemberId: null,
+  isCurrentUserHost: false }`. Member payload is unchanged from today. *(Assumed from OQ1.)*
+- **A2:** `roomGet` = **60/min/IP**, fail-open; `userSearch` = **30/min/user**, fail-open.
+  *(Proposed defaults — tunable in PLAN; not blocking.)*
+- **A3:** `searchUsers` min length = **2**; email match = exact case-insensitive `equals`; result
+  shape = `{ id, displayName }`. *(Assumed from OQ2.)*
+- **A4:** Keep `email` in `listFriends`/`PublicUser` (friends list); only the **search** path drops
+  it. *(Scope decision — flagged in §4/§6.)*
+- **OQ-b1 (non-blocking):** are the proposed limits (A2) acceptable, or tighter for `roomGet`?
+  Default to A2 unless the user prefers otherwise at plan-approval.
 
-- **OQ1 — room code / roster.** Pick: (a) raise code entropy (longer/typed code), (b) keep the code but
-  **restrict the unauth roster GET** to existence + name only (hide members/`lastSeenAt`/matched movie from
-  non-members) + rate-limit the GET, or (c) both. (b) preserves the share-a-short-code UX; (a) changes it.
-- **OQ2 — user search.** Min query length (2 or 3?); **exact email match vs substring**; **drop, mask, or
-  keep** email in results (drop = `FriendsClient` no longer shows it). Plus a `userSearch` rate-limit.
-- **OQ3 — restricted auth edit.** Approve editing `app/api/auth/[...nextauth]/route.ts` to add the IP login
-  throttle (H1)? No `auth.ts` change required.
-- **OQ4 — DECLINED friend requests.** Hard-block re-open, or allow re-open after a cooldown window?
-- **OQ5 — scope/size.** WP1 spans ~9 files + tests. Ship as **one** RESEARCH→…→TEST cycle, or split into
-  **WP1a** (limiter core: H1, H2, H3, member cap, vote guard+throttle, friend-request throttle) and **WP1b**
-  (enumeration/UX: room-code/roster, user-search) so the UX decisions don't block the security-critical core?
+---
 
 ## 6. Out of Scope
 
-- Other work packages: WP2 (security headers/CSP), WP3 (Sentry/observability), WP5 (env fail-fast),
-  WP6 (privacy/legal), WP7 (ops/backup runbooks), WP8 (`next` 16).
-- Migrating the limiter to Redis/Upstash; any change to the `RateLimit` schema/migration.
-- Full recommender-integrity redesign (forged-event ranking influence — already bounded, §4).
-- Adding `@vercel/functions` or any new dependency; CAPTCHA / email-verification / account-lockout-email flows.
-- `auth.ts` credential logic (restricted; not needed for IP throttling).
+- Lengthening or changing the room-code format (`lib/room-code.ts`) — OQ1 explicitly keeps the short
+  code; no code change there.
+- Dropping `email` from `listFriends` / `GET /api/friends` (the unrendered friends-list email) —
+  lower-risk residual, deferred.
+- Any schema/migration change, Redis/Upstash, CAPTCHA, or new dependency.
+- Other work packages: WP2 (headers/CSP), WP3 (Sentry), WP5 (env fail-fast), WP6 (privacy), WP7
+  (ops/backup runbooks), WP8 (`next` 16).
+- Auth/session logic (`auth.ts`, `app/api/auth/`) — untouched.
 
-## 6a. Decisions (resolved with user, 2026-06-21)
-
-- **OQ5 → SPLIT.** This cycle = **WP1a (limiter core)**: H1 login throttle, H2 fail-closed (auth
-  scopes), H3 events ingest, M-join member cap, M-vote `typeof` guard + per-member throttle, M-friend
-  request rate-limit + DECLINED cooldown. **WP1b** (room-code/roster restriction + user-search
-  enumeration) is a **follow-up cycle** with direction already set (below).
-- **OQ3 → APPROVED.** May edit `app/api/auth/[...nextauth]/route.ts` to wrap the NextAuth `POST` with an
-  IP login throttle (credentials-callback path only, no body read, no `auth.ts` change).
-- **OQ1 → (WP1b)** restrict the unauth roster GET to existence + name + status; members/`lastSeenAt`/
-  matched-movie only for authenticated members; rate-limit the GET; **keep the short code**.
-- **OQ2 → (WP1b)** display-name substring (min 2) + **exact** email match; **drop email** from the
-  response (update `FriendsClient`); add a `userSearch` rate-limit.
-- **OQ4 → COOLDOWN.** `Friendship.updatedAt` exists, so DECLINED re-open is allowed only after a cooldown
-  window (propose **24h**) rather than a permanent block — migration-free, less user-hostile.
-- **Confirmed migration-free & dependency-free:** new `RATE_LIMITS` scopes only; member cap counts
-  `Member.leftAt: null` inside the existing join `$transaction`; no `@vercel/functions`.
+---
 
 ## 7. Readiness Verdict: READY FOR PLANNING
 
-All findings confirmed against current code; H2's XFF half corrected (platform-mitigated); the genuine
-design decisions are isolated as OQ1–OQ5. Pending the user's answers (esp. OQ1, OQ2, OQ3, OQ5), this is
-ready to advance to PLAN.
+All call sites confirmed against current code: the only consumer needing a change is the lobby
+(`app/room/[code]/lobby/page.tsx`); `done`/`setup`/`HostFilterEditor` are already null-safe; the
+existing GET test passes unchanged; the `searchUsers` test is updated in-scope. The query-shape
+decision (keep `room.findUnique({include})`) is dictated by the existing mock. Design decisions are
+settled (OQ1/OQ2); only tunable limits remain (A2), which are not blocking. Ready to advance to PLAN.

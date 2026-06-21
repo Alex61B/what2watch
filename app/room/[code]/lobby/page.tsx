@@ -16,8 +16,10 @@ interface RoomState {
   code: string;
   name: string | null;
   status: string;
-  streamingServices: string[];
-  members: RoomMember[];
+  // members + streamingServices are members-only (M1): omitted from the pre-join (non-member)
+  // payload, then present after the user joins and the lobby re-fetches as a member.
+  streamingServices?: string[];
+  members?: RoomMember[];
   isCurrentUserHost: boolean;
   currentMemberId: string | null;
   expired?: boolean;
@@ -78,7 +80,7 @@ export default function LobbyPage() {
           return;
         }
         setRoom(data);
-        setMemberCount(data.members.length);
+        setMemberCount(data.members?.length ?? 0);
         setJoined(data.currentMemberId !== null);
         // Only redirect users who have actually joined (have a session/member).
         // A new user opening the share link for an in-progress room must see the
@@ -153,7 +155,7 @@ export default function LobbyPage() {
       if (roomRes.ok) {
         const data: RoomState = await roomRes.json();
         setRoom(data);
-        setMemberCount(data.members.length);
+        setMemberCount(data.members?.length ?? 0);
         setJoined(true);
         // A mid-session join (room already VOTING) routes to /vote, which shows
         // the "waiting for the host to approve you" screen; a lobby join is a
@@ -213,9 +215,9 @@ export default function LobbyPage() {
 
   const isHost = room.isCurrentUserHost;
   const currentMemberId = room.currentMemberId ?? "";
-  const count = memberCount ?? room.members.length;
+  const count = memberCount ?? room.members?.length ?? 0;
   const hasEnoughMembers = count >= 2;
-  const hasServices = room.streamingServices.length > 0;
+  const hasServices = (room.streamingServices?.length ?? 0) > 0;
 
   return (
     <main className="min-h-screen bg-canvas text-ink">
@@ -282,7 +284,7 @@ export default function LobbyPage() {
 
             <section className="mt-8 space-y-2">
               <p className={EYEBROW}>Members{memberCount !== null ? ` · ${memberCount}` : ""}</p>
-              <MemberList members={room.members} currentMemberId={currentMemberId} />
+              <MemberList members={room.members ?? []} currentMemberId={currentMemberId} />
             </section>
 
             <section className="mt-8 space-y-3 border border-line bg-surface p-6">
