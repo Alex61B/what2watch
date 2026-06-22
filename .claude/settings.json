@@ -53,7 +53,14 @@
       "Bash(npx prisma migrate deploy*)",
       "Bash(npx prisma migrate dev*)",
       "Bash(npx prisma db push*)",
-      "Bash(npx prisma migrate reset*)"
+      "Bash(npx prisma migrate reset*)",
+      "mcp__vercel__deploy_to_vercel",
+      "mcp__vercel__add_toolbar_reaction",
+      "mcp__vercel__change_toolbar_thread_resolve_status",
+      "mcp__vercel__edit_toolbar_message",
+      "mcp__vercel__reply_to_toolbar_thread",
+      "mcp__vercel__import-claude-design-from-url",
+      "mcp__vercel__get_access_to_vercel_url"
     ],
     "deny": []
   },
