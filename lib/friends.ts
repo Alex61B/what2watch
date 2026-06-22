@@ -22,6 +22,19 @@ export interface PublicUser {
   email: string
 }
 
+/**
+ * Search result shape — deliberately excludes email (M2). Search is open discovery across the whole
+ * user table, so it must not become an address-harvesting endpoint. Email lives on PublicUser only
+ * for already-connected friends/requests, which listFriends returns.
+ */
+export interface UserSearchResult {
+  id: string
+  displayName: string
+}
+
+/** Minimum query length for user search — blocks single-char enumeration of the user table (M2). */
+export const USER_SEARCH_MIN_LENGTH = 2
+
 const eitherDirection = (a: string, b: string) => ({
   OR: [
     { requesterId: a, receiverId: b },
@@ -98,18 +111,20 @@ export async function listFriends(userId: string): Promise<{
   return { friends, incoming, outgoing }
 }
 
-export async function searchUsers(query: string, excludeUserId: string): Promise<PublicUser[]> {
+export async function searchUsers(query: string, excludeUserId: string): Promise<UserSearchResult[]> {
   const q = query.trim()
-  if (!q) return []
+  // M2: require ≥2 chars (no single-char table scrape), match display name as a substring but email
+  // only EXACTLY (case-insensitive) — substring email match would turn this into address harvesting.
+  if (q.length < USER_SEARCH_MIN_LENGTH) return []
   return prisma.user.findMany({
     where: {
       id: { not: excludeUserId },
       OR: [
-        { email: { contains: q, mode: 'insensitive' } },
+        { email: { equals: q, mode: 'insensitive' } },
         { displayName: { contains: q, mode: 'insensitive' } },
       ],
     },
-    select: { id: true, displayName: true, email: true },
+    select: { id: true, displayName: true },
     take: 10,
   })
 }

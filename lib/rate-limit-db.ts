@@ -33,6 +33,11 @@ export const RATE_LIMITS = {
   events: { limit: 240, windowMs: 60_000 },
   vote: { limit: 120, windowMs: 60_000 }, // ≈2/sec sustained — keyed per member, generous for swipe-voting
   friendRequest: { limit: 20, windowMs: 60 * 60_000 }, // keyed per authenticated user
+  // M1: best-effort enumeration throttle on the unauth roster GET — keyed per IP, fail-open so a
+  // limiter-DB hiccup never blocks the share-link lobby load. Codes stay short by design.
+  roomGet: { limit: 60, windowMs: 60_000 },
+  // M2: user-search throttle — keyed per authenticated user (mirrors friendRequest), fail-open.
+  userSearch: { limit: 30, windowMs: 60_000 },
 } as const
 
 /** Best-effort client IP from Vercel's edge-set x-forwarded-for (leftmost hop). */

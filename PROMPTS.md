@@ -2,6 +2,31 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-21 — WP1b: Enumeration / UX hardening
+
+**Prompt (summary):** After opening the WP1a PR (#22, rebased standalone onto `main`), continue with
+**WP1b** on a branch off the WP1a tip (`feat/wp1b-enumeration-hardening`). Close audit **M1**
+(room-roster GET over-exposure) and **M2** (user-search enumeration + email leak), direction
+pre-decided as OQ1/OQ2. Full RESEARCH→PLAN→IMPLEMENT→TEST cycle; plan approved with default limits.
+
+**Approach:** Migration-free, dependency-free, no `auth.ts` change — both findings reuse the durable
+limiter from WP1a. **M1:** `GET /api/rooms/[code]` now gates its payload on membership — non-members
+(incl. the pre-join share-link lobby) get existence + `name` + `status` only; the roster,
+`lastSeenAt`, matched movie, and room config are members-only. Added an IP rate-limit (`roomGet`
+60/min, fail-open) checked **before** the DB lookup so probing unknown codes is throttled too; kept
+the short code. Hardened the one consumer that reads the payload pre-join
+(`app/room/[code]/lobby/page.tsx`) to treat `members`/`streamingServices` as optional;
+`done`/`setup`/`HostFilterEditor` were already null-safe. **M2:** `searchUsers` now requires ≥2
+chars, matches email **exactly** (was substring) + display-name as substring, and **drops email**
+from results (new `UserSearchResult` type; `FriendsClient` stops rendering it). Added a per-user
+`userSearch` rate-limit (30/min, fail-open). Research/plan in `docs/research.md` +
+`docs/plan-wp1b-enumeration-hardening.md`.
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + **305 Jest tests** (49 suites, +9
+new over WP1a-on-main's 296/47). New/updated: roster-GET visibility (non-member minimal / member
+full / 404 / 429-before-lookup), user-search route (401 / 429 / no-email), `searchUsers` lib (min-2 /
+exact-email / drop-email), limiter scope config.
+
 ## 2026-06-21 — WP1a: Abuse & rate-limit hardening (limiter core)
 
 **Prompt (summary):** Continue the production-readiness audit from `docs/session-handoff-2026-06-21.md`;

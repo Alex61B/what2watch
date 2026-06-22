@@ -6,13 +6,16 @@ import Link from 'next/link'
 
 interface PublicUser { id: string; displayName: string; email: string }
 interface PendingItem { requestId: string; user: PublicUser }
+// Search results never carry email (M2) — searching is open discovery, so the endpoint must not
+// expose addresses. Friends/requests still use PublicUser (an existing relationship).
+interface SearchResult { id: string; displayName: string }
 
 export default function FriendsClient() {
   const [friends, setFriends] = useState<PublicUser[]>([])
   const [incoming, setIncoming] = useState<PendingItem[]>([])
   const [outgoing, setOutgoing] = useState<PendingItem[]>([])
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<PublicUser[]>([])
+  const [results, setResults] = useState<SearchResult[]>([])
   const [loaded, setLoaded] = useState(false)
 
   const refresh = useCallback(async () => {
@@ -71,7 +74,7 @@ export default function FriendsClient() {
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Search by name or email"
+            placeholder="Search by name or exact email"
             className="flex-1 rounded-lg bg-surface-soft border border-line px-4 py-2.5 text-ink focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
           <button type="submit" className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-2.5 font-semibold text-white">Search</button>
@@ -81,7 +84,7 @@ export default function FriendsClient() {
           const pending = outgoingIds.has(u.id)
           return (
             <div key={u.id} className="flex items-center justify-between bg-surface rounded-lg px-4 py-3">
-              <span className="text-sm">{u.displayName} <span className="text-faint">{u.email}</span></span>
+              <span className="text-sm">{u.displayName}</span>
               <button
                 type="button"
                 disabled={already || pending}

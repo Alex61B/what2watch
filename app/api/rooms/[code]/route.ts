@@ -3,12 +3,18 @@ import { prisma } from '@/lib/prisma'
 import { getSessionToken } from '@/lib/session'
 import { getMovieById } from '@/lib/tmdb'
 import { roomExpired, expiredRoomResponse } from '@/lib/room'
+import { checkRateLimit, getClientIp, RATE_LIMITS, tooManyRequests } from '@/lib/rate-limit-db'
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ code: string }> }
 ) {
   const { code } = await params
+
+  // M1: throttle enumeration per IP. Checked before the DB lookup so probing non-existent codes is
+  // also limited (otherwise 404s would be a free oracle for guessing the short code space).
+  const rl = await checkRateLimit('room-get', getClientIp(request), RATE_LIMITS.roomGet)
+  if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds)
 
   const room = await prisma.room.findUnique({
     where: { code },
@@ -30,6 +36,19 @@ export async function GET(
         select: { id: true, isHost: true },
       })
     : null
+
+  // M1: non-members (incl. the pre-join share-link lobby) get existence + name + status only.
+  // The roster, lastSeenAt, matched movie, and room config are members-only.
+  if (!currentMember) {
+    return NextResponse.json({
+      code: room.code,
+      name: room.name,
+      status: room.status,
+      expired: roomExpired(room),
+      isCurrentUserHost: false,
+      currentMemberId: null,
+    })
+  }
 
   let matchedMovie = null
   if (room.matchedMovieId) {
@@ -54,8 +73,8 @@ export async function GET(
     members: room.members,
     matchedMovie,
     expired: roomExpired(room),
-    isCurrentUserHost: currentMember?.isHost ?? false,
-    currentMemberId: currentMember?.id ?? null,
+    isCurrentUserHost: currentMember.isHost,
+    currentMemberId: currentMember.id,
   })
 }
 

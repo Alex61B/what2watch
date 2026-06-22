@@ -112,16 +112,21 @@ describe('friends', () => {
     expect(outgoing).toEqual([{ requestId: 'r3', user: { id: 'd', displayName: 'Dee', email: 'd@x' } }])
   })
 
-  it('searchUsers returns [] for blank query and excludes the caller otherwise', async () => {
+  it('searchUsers returns [] for blank or single-char queries without hitting the DB (M2 min length)', async () => {
     expect(await searchUsers('   ', 'a')).toEqual([])
-    u.findMany.mockResolvedValueOnce([{ id: 'b', displayName: 'Bob', email: 'b@x' }])
+    expect(await searchUsers('b', 'a')).toEqual([])
+    expect(u.findMany).not.toHaveBeenCalled()
+  })
+
+  it('searchUsers matches email exactly + name as substring, excludes the caller, and never returns email (M2)', async () => {
+    u.findMany.mockResolvedValueOnce([{ id: 'b', displayName: 'Bob' }])
     const rows = await searchUsers('bob', 'a')
     expect(u.findMany).toHaveBeenCalledWith({
-      where: { id: { not: 'a' }, OR: [{ email: { contains: 'bob', mode: 'insensitive' } }, { displayName: { contains: 'bob', mode: 'insensitive' } }] },
-      select: { id: true, displayName: true, email: true },
+      where: { id: { not: 'a' }, OR: [{ email: { equals: 'bob', mode: 'insensitive' } }, { displayName: { contains: 'bob', mode: 'insensitive' } }] },
+      select: { id: true, displayName: true },
       take: 10,
     })
-    expect(rows).toEqual([{ id: 'b', displayName: 'Bob', email: 'b@x' }])
+    expect(rows).toEqual([{ id: 'b', displayName: 'Bob' }])
   })
 
   it('getSharedWatchlist intersects both users WATCHLIST entries', async () => {

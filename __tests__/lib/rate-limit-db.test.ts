@@ -67,4 +67,12 @@ describe('checkRateLimit', () => {
     expect(RATE_LIMITS.signup.failClosed).toBe(true)
     expect(RATE_LIMITS.login.failClosed).toBe(true)
   })
+
+  it('configures the WP1b enumeration scopes (roomGet, userSearch) fail-open (M1/M2)', () => {
+    expect(RATE_LIMITS.roomGet).toEqual({ limit: 60, windowMs: 60_000 })
+    expect(RATE_LIMITS.userSearch).toEqual({ limit: 30, windowMs: 60_000 })
+    // Neither is an auth/brute-force vector; availability of lobby/search wins on a limiter outage.
+    expect((RATE_LIMITS.roomGet as { failClosed?: boolean }).failClosed).toBeUndefined()
+    expect((RATE_LIMITS.userSearch as { failClosed?: boolean }).failClosed).toBeUndefined()
+  })
 })
