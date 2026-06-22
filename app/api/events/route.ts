@@ -27,13 +27,15 @@ export async function POST(request: Request) {
   if (rawEvents.length === 0) return NO_CONTENT()
 
   const ip = (request.headers.get('x-forwarded-for') ?? '').split(',')[0].trim()
-  const key = anonId ?? `ip:${ip || 'unknown'}`
+  // H3: rate-limit by IP, never by the client-supplied anonId — rotating anonId must not raise
+  // the cap. anonId is still stored below for analytics dedup, just not trusted for limiting.
+  const rlKey = `ip:${ip || 'unknown'}`
   // L1: cheap per-instance fast-path blunts a tight loop before it touches the DB.
-  if (!rateLimit(key, rawEvents.length, Date.now())) {
+  if (!rateLimit(rlKey, rawEvents.length, Date.now())) {
     return new NextResponse(null, { status: 429 })
   }
   // L2: durable global cap across all serverless instances.
-  const durable = await checkRateLimit('events', key, RATE_LIMITS.events)
+  const durable = await checkRateLimit('events', rlKey, RATE_LIMITS.events)
   if (!durable.ok) {
     return new NextResponse(null, { status: 429, headers: { 'Retry-After': String(durable.retryAfterSeconds) } })
   }
@@ -65,8 +67,9 @@ export async function POST(request: Request) {
       type: e.type,
       anonId: anonId ?? 'anon:none',
       userId,
-      roomId: typeof e.roomId === 'string' ? e.roomId : null,
-      memberId: typeof e.memberId === 'string' ? e.memberId : null,
+      // H3: bound forged id length so a malicious client can't stuff oversized strings.
+      roomId: typeof e.roomId === 'string' && e.roomId.length <= 64 ? e.roomId : null,
+      memberId: typeof e.memberId === 'string' && e.memberId.length <= 64 ? e.memberId : null,
       props: props as Prisma.InputJsonValue | undefined,
       ts,
     })

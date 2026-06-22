@@ -15,14 +15,24 @@ export interface RateLimitResult {
 export interface RateLimitOptions {
   limit: number
   windowMs: number
+  /**
+   * When true, a limiter DB error is treated as a DENY (fail CLOSED) instead of the default
+   * fail-OPEN. Use for auth-sensitive scopes (login/signup) where a brute-force window must
+   * never be opened by a transient DB hiccup. Safe because those flows already require the DB
+   * (user lookup/create), so failing closed removes no availability the outage hadn't already.
+   */
+  failClosed?: boolean
 }
 
-/** Per-endpoint limits (tunable). Keyed per client IP. */
+/** Per-endpoint limits (tunable). Keyed per client IP unless noted. */
 export const RATE_LIMITS = {
-  signup: { limit: 5, windowMs: 15 * 60_000 },
+  signup: { limit: 5, windowMs: 15 * 60_000, failClosed: true },
+  login: { limit: 10, windowMs: 15 * 60_000, failClosed: true },
   roomCreate: { limit: 10, windowMs: 10 * 60_000 },
   roomJoin: { limit: 20, windowMs: 10 * 60_000 },
   events: { limit: 240, windowMs: 60_000 },
+  vote: { limit: 120, windowMs: 60_000 }, // ≈2/sec sustained — keyed per member, generous for swipe-voting
+  friendRequest: { limit: 20, windowMs: 60 * 60_000 }, // keyed per authenticated user
 } as const
 
 /** Best-effort client IP from Vercel's edge-set x-forwarded-for (leftmost hop). */
@@ -34,7 +44,8 @@ export function getClientIp(request: Request): string {
 
 /**
  * Atomically increment the counter for this (scope, identifier, window) and decide.
- * Fails OPEN: a limiter DB hiccup must never block signups/joins.
+ * Fails OPEN by default (a limiter DB hiccup must never block joins/telemetry); pass
+ * `opts.failClosed` for auth-sensitive scopes so a DB error denies instead.
  */
 export async function checkRateLimit(
   scope: string,
@@ -57,10 +68,14 @@ export async function checkRateLimit(
     if (count <= opts.limit) return { ok: true, retryAfterSeconds: 0 }
     return { ok: false, retryAfterSeconds: Math.max(1, Math.ceil((expiresAt.getTime() - now) / 1000)) }
   } catch (err) {
-    console.error('[rate-limit-db] check failed, failing open', {
+    const mode = opts.failClosed ? 'closed' : 'open'
+    console.error(`[rate-limit-db] check failed, failing ${mode}`, {
       scope,
       message: err instanceof Error ? err.message : String(err),
     })
+    if (opts.failClosed) {
+      return { ok: false, retryAfterSeconds: Math.ceil(opts.windowMs / 1000) }
+    }
     return { ok: true, retryAfterSeconds: 0 }
   }
 }

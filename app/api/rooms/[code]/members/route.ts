@@ -1,8 +1,11 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { generateSessionToken, setSessionCookie } from '@/lib/session'
-import { roomExpired, expiredRoomResponse } from '@/lib/room'
+import { roomExpired, expiredRoomResponse, MAX_ROOM_MEMBERS } from '@/lib/room'
 import { checkRateLimit, getClientIp, RATE_LIMITS, tooManyRequests } from '@/lib/rate-limit-db'
+
+// Sentinel thrown inside the join transaction when the room is at capacity; caught below → 409.
+class RoomFullError extends Error {}
 
 export async function POST(
   request: Request,
@@ -37,6 +40,12 @@ export async function POST(
       select: { status: true },
     })
     const status = current?.status ?? room.status
+
+    // M-join: cap active members. Counted inside the transaction so two concurrent joins
+    // can't both pass the check; an empty (leftAt) seat frees capacity.
+    const activeCount = await tx.member.count({ where: { roomId: room.id, leftAt: null } })
+    if (activeCount >= MAX_ROOM_MEMBERS) throw new RoomFullError()
+
     // Joining mid-session (VOTING) requires host approval; lobby joins auto-approve.
     const approved = status !== 'VOTING'
 
@@ -56,7 +65,14 @@ export async function POST(
     await tx.room.update({ where: { id: room.id }, data: { queueVersion: { increment: 1 } } })
 
     return created
+  }).catch((err) => {
+    if (err instanceof RoomFullError) return null
+    throw err
   })
+
+  if (!member) {
+    return NextResponse.json({ error: 'Room is full' }, { status: 409 })
+  }
 
   const response = NextResponse.json({ memberId: member.id })
   setSessionCookie(response, code, sessionToken)

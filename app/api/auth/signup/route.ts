@@ -4,6 +4,8 @@ import { prisma } from '@/lib/prisma'
 import { checkRateLimit, getClientIp, RATE_LIMITS, tooManyRequests } from '@/lib/rate-limit-db'
 
 export async function POST(request: Request) {
+  // H2: RATE_LIMITS.signup is failClosed — a limiter DB error denies (429) rather than opening
+  // an unthrottled signup window. Safe: signup already needs the DB to create the user.
   const rl = await checkRateLimit('signup', getClientIp(request), RATE_LIMITS.signup)
   if (!rl.ok) return tooManyRequests(rl.retryAfterSeconds)
 

@@ -35,6 +35,7 @@ beforeEach(() => {
   createMany.mockClear()
   mockAuth.mockResolvedValue(null)
   __resetRateLimit()
+  ;(checkRateLimit as jest.Mock).mockClear()
   ;(checkRateLimit as jest.Mock).mockResolvedValue({ ok: true, retryAfterSeconds: 0 })
 })
 
@@ -93,4 +94,18 @@ test('returns 429 when the durable global limit is exceeded', async () => {
   const res = await post({ anonId: 'a1', events: [{ type: 'page_view' }] })
   expect(res.status).toBe(429)
   expect(createMany).not.toHaveBeenCalled()
+})
+
+test('keys the durable limit on IP, not the client-supplied anonId (H3)', async () => {
+  await post({ anonId: 'rotating-xyz', events: [{ type: 'page_view' }] }, { 'x-forwarded-for': '9.9.9.9' })
+  expect((checkRateLimit as jest.Mock).mock.calls[0][1]).toBe('ip:9.9.9.9')
+})
+
+test('drops oversized roomId/memberId (>64 chars) to null but keeps bounded ids (H3)', async () => {
+  const tooLong = 'x'.repeat(65)
+  const ok64 = 'y'.repeat(64)
+  await post({ anonId: 'a1', events: [{ type: 'page_view', roomId: tooLong, memberId: ok64 }] })
+  const row = createMany.mock.calls[0][0].data[0]
+  expect(row.roomId).toBeNull()
+  expect(row.memberId).toBe(ok64)
 })

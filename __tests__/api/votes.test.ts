@@ -11,6 +11,7 @@ import { POST as castVote } from '@/app/api/rooms/[code]/votes/route'
 import { checkForMatch } from '@/lib/match'
 import { getMovieById } from '@/lib/tmdb'
 import { sessionCookieName } from '@/lib/session'
+import { checkRateLimit } from '@/lib/rate-limit-db'
 
 interface Member { id: string; roomId: string; sessionToken: string; leftAt: Date | null; approved: boolean; userId: string | null }
 interface Room { id: string; code: string; status: string; currentPosition: number; queueVersion: number; expiresAt: Date }
@@ -45,6 +46,10 @@ jest.mock('@/lib/match', () => ({ checkForMatch: jest.fn() }))
 jest.mock('@/lib/tmdb', () => ({ getMovieById: jest.fn() }))
 jest.mock('@/lib/link', () => ({ resolveMemberUserId: jest.fn(async () => null) }))
 jest.mock('@/lib/preferences', () => ({ addPreference: jest.fn(async () => {}) }))
+jest.mock('@/lib/rate-limit-db', () => ({
+  ...jest.requireActual('@/lib/rate-limit-db'),
+  checkRateLimit: jest.fn(async () => ({ ok: true, retryAfterSeconds: 0 })),
+}))
 
 const jar = new Map<string, string>()
 jest.mock('next/headers', () => ({
@@ -79,6 +84,7 @@ beforeEach(() => {
   mockVoteUpsert.mockClear()
   mockMatch.mockReset()
   mockMovie.mockReset()
+  ;(checkRateLimit as jest.Mock).mockResolvedValue({ ok: true, retryAfterSeconds: 0 })
   jar.clear()
 })
 
@@ -124,6 +130,22 @@ describe('POST /votes', () => {
   it('400 when the vote field is not a boolean', async () => {
     authAs('AAA-11')
     expect((await castVote(req({ tmdbMovieId: '10' }), ctx('AAA-11'))).status).toBe(400)
+  })
+
+  it('400 when tmdbMovieId is not a string (M-vote type guard)', async () => {
+    authAs('AAA-11')
+    const res = await castVote(req({ tmdbMovieId: 10, vote: true }), ctx('AAA-11'))
+    expect(res.status).toBe(400)
+    expect(mockVoteUpsert).not.toHaveBeenCalled()
+  })
+
+  it('429 when the member exceeds the vote throttle (M-vote)', async () => {
+    authAs('AAA-11')
+    ;(checkRateLimit as jest.Mock).mockResolvedValueOnce({ ok: false, retryAfterSeconds: 30 })
+    const res = await castVote(req({ tmdbMovieId: '10', vote: true }), ctx('AAA-11'))
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('30')
+    expect(mockVoteUpsert).not.toHaveBeenCalled()
   })
 
   it('409 when the movie is not part of this room', async () => {

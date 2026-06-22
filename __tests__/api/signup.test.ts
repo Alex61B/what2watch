@@ -56,3 +56,8 @@ test('400 on an invalid email', async () => {
   const res = await post({ email: 'not-an-email', displayName: 'Al', password: 'password123' })
   expect(res.status).toBe(400)
 })
+
+test('uses the fail-closed signup scope so a limiter outage denies rather than opens (H2)', async () => {
+  await post({ email: 'a@b.com', displayName: 'Al', password: 'password123' })
+  expect(mockCheck).toHaveBeenCalledWith('signup', expect.any(String), expect.objectContaining({ failClosed: true }))
+})
