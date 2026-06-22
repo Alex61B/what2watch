@@ -1,208 +1,218 @@
-# Research — WP1b: Enumeration / UX Hardening
+# RESEARCH — WP6: Privacy & Data Lifecycle (PikFlix / What2Watch)
 
-> Follow-up to WP1a (limiter core, PR #22). Closes the remaining half of WP1 from the
-> 2026-06-21 production-readiness audit: **M1** (room-roster GET over-exposure) and **M2**
-> (user-search enumeration + email exposure). Direction was pre-decided with the user on
-> 2026-06-21 (recorded in the WP1a research as OQ1/OQ2). **Migration-free, dependency-free.**
+> **State:** RESEARCH (read-only). No application code touched. This document supersedes the
+> prior WP1b research content; WP1b's durable record is `docs/plan-wp1b-enumeration-hardening.md`
+> + `docs/session-handoff-2026-06-21-wp1b.md`.
+> **Audit findings closed by this WP:** **C1** (no privacy/terms pages → launch blocker +
+> Google OAuth suspension risk) and **M9** (PII grows unbounded; no account-deletion / erasure
+> path; `Event.userId` not scrubbed).
 
 ---
 
 ## 1. Requirements Summary
 
-Two information-disclosure / enumeration findings, both reusing the existing durable limiter
-`lib/rate-limit-db.ts` (no new infra, no schema change, no auth change).
+**What WP6 delivers and why.** PikFlix collects real personal data (email, display name, Google
+OAuth tokens, social graph, taste profile, behavioral analytics) but ships **zero** privacy/legal
+surface and **no way for a user to delete their account**. This is the single calendar-critical
+launch blocker (audit **C1**) and a standing legal + platform-policy exposure.
 
-**M1 — Unauthenticated room-roster GET (`GET /api/rooms/[code]`) over-exposes room state.**
-Today the GET is fully unauthenticated and returns the **full** room state to anyone who knows
-(or guesses) a code: the member roster (`id`, `displayName`, `isHost`, `lastSeenAt`), the matched
-movie (incl. `watchUrl`/`streamingService`), and all room config (`streamingServices`, `filters`,
-`watchedFilter`). Room codes are short and guessable (`ADJECTIVE-DD` = 100 × 90 = 9 000 combos,
-`lib/room-code.ts`), so this is enumerable.
-- **Decided (OQ1):** the unauthenticated/non-member response is restricted to **existence + room
-  `name` + `status`** (plus `expired`, and the already-session-gated `currentMemberId`/
-  `isCurrentUserHost`, which are `null`/`false` for non-members). `members`, `lastSeenAt`,
-  `matchedMovie`, and room config become **members-only** (caller must hold a valid per-room
-  session for that room). **Keep the short shareable code** — do not lengthen it.
-- **Decided (OQ1):** add an **IP rate-limit** on the GET to throttle enumeration.
+Three deliverables, each independently launch-gating:
 
-**M2 — User search (`GET /api/users/search` → `lib/friends.ts#searchUsers`) enables enumeration
-and leaks email.** Today `searchUsers` substring-matches **both** `displayName` **and** `email`
-(case-insensitive `contains`) on any non-empty query and returns `email` in the payload;
-`components/FriendsClient.tsx` renders that email under every result. A single-character query
-returns a broad slice of the user table, and email substring match turns the box into an
-address-harvesting tool.
-- **Decided (OQ2):** `displayName` **substring** match requires a **minimum of 2 characters**;
-  `email` matches **exactly** (case-insensitive `equals`, not `contains`). **Drop `email` from the
-  search response** and stop rendering it in `FriendsClient`. Add a **`userSearch` rate-limit**.
+1. **Publish a Privacy Policy (`/privacy`) and Terms of Service (`/terms`).**
+   - *Legal basis:* GDPR Art. 13/14 (transparency) and CCPA/CPRA notice-at-collection both require
+     a published privacy notice before collecting personal data.
+   - *Platform basis (verified):* Google's OAuth consent screen requires the privacy policy to be
+     **linked on the consent screen and hosted on the same domain as the homepage**; the policy must
+     disclose how the app accesses/uses/stores/shares Google user data. Publishing to production
+     triggers **brand + domain verification (~2–3 business days)**.
 
-**Why now:** both are pre-launch hardening items (audit M1/M2). They are independent of WP1a but
-share `lib/friends.ts` (WP1a added the friend-request cooldown there), which is why this branch is
-stacked on the WP1a tip.
+2. **Account-deletion / right-to-erasure flow (audit M9).**
+   - *Legal basis:* GDPR Art. 17 (erasure), CCPA right to delete.
+   - *Platform basis (verified):* Google's API Services User Data Policy requires any app that lets
+     users create an account to provide an **in-app deletion option AND a web-accessible deletion
+     request path**, and to delete the associated user data (retention permitted only for disclosed
+     security/fraud/legal reasons).
+   - *Technical:* a deletion must cascade `User` → `Account`/`Member`/`Friendship`/
+     `UserMoviePreference` (FKs already cascade) **and explicitly scrub `Event.userId`** (nullable,
+     **no FK** — orphaned analytics rows otherwise retain the user link for up to 90 days).
 
----
+3. **Register the consent-screen URLs in Google Cloud Console** (homepage + `/privacy` + `/terms` on
+   the production domain) and publish the app. **Owner action** (Console, not code) — but it depends
+   on the pages from (1) being live on the real domain.
 
-## 2. Stack Choices (reuse existing patterns — no new dependencies)
-
-- **Rate limiting:** reuse `lib/rate-limit-db.ts` exactly as WP1a wired it. Add two scopes to
-  `RATE_LIMITS` and call `checkRateLimit(scope, identifier, RATE_LIMITS.x)` → `tooManyRequests(...)`.
-  - `roomGet`: **IP-keyed** (`getClientIp(request)`), **fail-open** (default) — best-effort
-    enumeration throttle; the lobby must still load on a limiter-DB hiccup. Proposed **60 / min / IP**
-    (legit callers fetch the GET a handful of times; polling uses `/poll`, not this route).
-  - `userSearch`: **per-authenticated-user**-keyed (`session.user.id`, mirroring `friendRequest`),
-    **fail-open**. Proposed **30 / min / user**.
-- **Membership check:** reuse the existing `getSessionToken(code)` + `prisma.member.findFirst({ where:
-  { sessionToken, roomId } })` already present in the GET handler — the gate is "did this browser
-  resolve to a member of *this* room". Keep the current `room.findUnique({ include: { members } })`
-  query shape (do **not** switch to `member.findMany`) so the existing `room-name.test.ts` prisma
-  mock — which implements `room.findUnique({include})` + `member.findFirst` but **not**
-  `member.findMany` — stays valid.
-- **Search query change:** Prisma `where` only — `email: { equals: q, mode: 'insensitive' }` and an
-  early `if (q.length < 2) return []`; narrow `select` to `{ id, displayName }`.
-- **Types:** keep `PublicUser { id, displayName, email }` for `listFriends` (accepted friends /
-  pending requests already have a relationship; email there is unrendered and out of M2's scope).
-  Give `searchUsers` a **narrower** return type (`{ id: string; displayName: string }`) so email
-  cannot leak through search. Mirror with a local result type in `FriendsClient`.
+**Supporting UI:** footer/auth-form links to `/privacy` + `/terms` (currently `BrandFooter.tsx` is a
+bare copyright line); a brief at-collection consent line on the signup form; disclosure of the
+first-party analytics in the policy.
 
 ---
 
-## 3. Environment Verification
+## 2. Stack Choices (reuse existing patterns)
 
-- **Branch/state:** `feat/wp1b-enumeration-hardening` off the WP1a tip (`aa2a87a`); `.workflow_state`
-  = RESEARCH, `.workflow_failures` = 0. WP1a is in review as PR #22.
-- **Limiter is live:** `lib/rate-limit-db.ts` (Postgres-backed, cleanup cron) is in production after
-  WP1a; the `RateLimit` table + scope pattern already exist — adding scopes needs **no migration**.
-- **Verification command:** `bash scripts/verify.sh` (typecheck → lint → jest). Baseline on this
-  branch is **green: 296 tests / 47 suites** (the WP1a-on-main count).
-- **No `middleware.ts`** at the repo root — room pages are client-rendered and self-gate by fetching
-  room state, so a non-member *can* navigate to any `/room/[code]/*` route. Consumer audit below
-  accounts for this.
-- **`./node_modules/.bin/prisma` only** (bare `npx prisma` pulls v7). Not needed this cycle — no
-  schema change.
+- **Pages:** App Router **server components**, modeled on `app/profile/page.tsx` (`<main>` +
+  centered container + Tailwind semantic tokens `bg-canvas`/`text-ink`). `/privacy` and `/terms` are
+  static content pages — no client JS, no data fetching. No new deps.
+- **Styling:** Tailwind with the existing semantic tokens (`tailwind.config.ts`) + `serif`
+  (Playfair) for headings, matching the editorial look. No CSS modules.
+- **Footer links:** extend `components/BrandFooter.tsx` (or add a small `LegalLinks` partial) — it is
+  already rendered on the landing page (`app/page.tsx:289`).
+- **Deletion endpoint:** new `DELETE /api/account` (or `/api/user`) server route, auth-gated via the
+  existing `requireUserId()` / `ProfileGuard` pattern (server-side session check used across
+  `app/profile/*`). Wrap the multi-table delete + `Event.userId` scrub in a single Prisma
+  `$transaction` (same pattern WP1a used for the join cap). Apply a durable rate-limit scope from
+  `lib/rate-limit-db.ts` (fail-closed — it is a destructive, authenticated action).
+- **Deletion UI:** a "Delete account" control under `app/profile/settings/*` (client component with a
+  type-to-confirm guard), plus the web-accessible request path Google requires (the same authenticated
+  page satisfies "discoverable in-app"; document an email fallback in the policy for the
+  "without reinstalling" clause).
+- **Event scrub:** `prisma.event.updateMany({ where: { userId }, data: { userId: null } })` inside the
+  deletion transaction — keeps aggregate analytics intact while severing the identity link.
+- **Analytics opt-out (per decision 7):** add a persisted opt-out flag (localStorage, mirrors
+  `pikflix_anon`) + an early-return guard in `lib/analytics.ts#track()`/`flush()`, surfaced as a toggle
+  in `app/profile/settings/*`. No new dep; small, additive.
+- **Migrations:** **none expected.** `Event.userId` is already nullable; no schema change needed for
+  deletion. (If we later decide to also null `memberId`/`anonId` on events, still no schema change.)
+
+---
+
+## 3. Environment Verification (confirmed against live code)
+
+- **Google scopes are non-sensitive only** — `auth.ts:31-34` configures the Google provider with no
+  custom `scope`, so NextAuth's defaults (`openid email profile`) apply. ⇒ **no sensitive/restricted
+  security assessment required**; only brand + domain verification.
+- **IP is NOT persisted.** `app/api/events/route.ts` reads `x-forwarded-for` only to build the
+  rate-limit key; the `Event` row has no `ip` column and none is written. **No User-Agent logging.**
+  This materially shrinks the privacy policy's "what we collect" surface.
+- **Analytics is first-party, pseudonymous, bounded.** `anonId` is a client UUID in
+  `localStorage:pikflix_anon`; events are 90-day pruned by the cleanup cron
+  (`app/api/cron/cleanup/route.ts`, `EVENT_RETENTION_MS`). Allowed event types/props are allow-listed
+  (`lib/analytics-events.ts`) and carry no free-form PII.
+- **Cascade FKs already exist** for `Account`, `Member`, `Friendship`, `UserMoviePreference`,
+  `Vote`/`WatchedMovie` (via `Member`) → `User` deletion cleans them automatically. **Only
+  `Event.userId` is an unguarded orphan link.**
+- **Cookies are strictly functional:** `w2w_session_<CODE>` (httpOnly, sameSite=lax, secure in prod,
+  7-day) + the NextAuth JWT session cookie. `w2w_theme` + `pikflix_anon` are functional localStorage.
+  **No third-party/marketing/cross-site cookies.**
+- **Third-party data recipients:** Supabase/Postgres (all data), Google (OAuth handshake → returns
+  profile), Vercel (hosting/cron), TMDB (**no user data sent** — server-side API key + movie queries
+  only), streaming-service deep links (movie title only, no user identity).
+- **Domain is unknown in-repo:** `AUTH_URL=http://localhost:3000`; no `metadataBase`; production domain
+  not committed (Vercel auto-domain or an undocumented custom domain). **This blocks the Google
+  consent-screen registration and the `metadataBase`/canonical URL.** (Owner input.)
+- **Branding:** product name **"PikFlix"** (package `what2watch`); **no legal entity, contact email,
+  jurisdiction, or data-controller identity exists anywhere** in the repo.
 
 ---
 
 ## 4. Risks & Edge Cases
 
-- **Lobby consumer breakage (highest risk).** `app/room/[code]/lobby/page.tsx` is the share-link
-  landing page hit by **non-members**, and it consumes the GET response **unconditionally** before
-  the user joins: `setMemberCount(data.members.length)` (line 81) and `room.streamingServices.length`
-  (line 218) both run for every caller. Dropping `members`/`streamingServices` from the non-member
-  payload would throw `TypeError` and brick the lobby. **Mitigation:** harden the lobby to treat
-  `members`/`streamingServices` as optional (`data.members?.length ?? 0`, `room.members ?? []`,
-  `room.streamingServices?.length`). After joining, the lobby re-fetches the GET **as a member**
-  (line 152) and receives the full payload, so the member list still renders post-join.
-- **Other GET consumers are already safe** (audited): `done/page.tsx` uses only `data.name ?? null`;
-  `setup/page.tsx` guards every field (`data.members ?? []`, `data.streamingServices ?? []`) **and**
-  redirects non-hosts to the lobby (`if (!data.isCurrentUserHost) return router.replace(.../lobby)`)
-  before touching members; `HostFilterEditor.tsx` runs only in an authenticated host context. No
-  changes needed in those three.
-- **Existing GET test stays green.** `__tests__/api/room-name.test.ts` exercises the GET **as a
-  member** (cookie set via `applyCookies`) and asserts `.name`; `name` is in both the minimal and
-  full payloads, and `checkRateLimit` is already mocked-ok there → passes unchanged (no edit needed).
-- **searchUsers test must be updated.** `__tests__/lib/friends.test.ts` asserts the *exact* `where`
-  (`email: { contains }`) and `select` (incl. `email`); M2 changes both, so this test is updated
-  in-scope (email `equals`, `select` drops `email`, add min-2-char cases).
-- **Rate-limit ordering.** Check the IP limit at the **top** of the GET (before `findUnique`) so
-  probing **non-existent** codes is also throttled — otherwise 404s are a free enumeration oracle.
-- **Shared-IP / NAT false positives.** 60/min/IP for `roomGet` is generous enough for households /
-  small offices behind one IP loading a few rooms; fail-open avoids hard outages. (Codes remain
-  guessable by design — OQ1 kept the short code; rate-limiting is the agreed mitigation, not secrecy.)
-- **Residual, out of scope:** `listFriends` (and thus `GET /api/friends`) still returns `email` for
-  accepted friends / pending requests in the JSON (unrendered). Lower risk (requires an existing
-  relationship, not open enumeration); noted, not addressed this cycle.
-- **No new fail-closed scopes** — both new scopes are fail-open; neither is an auth/brute-force
-  vector, and availability of lobby/search is preferred on a limiter outage.
+**Schedule / external:**
+- **Google verification latency (~2–3 business days)** + domain verification of the homepage, privacy,
+  and ToS URLs. The pages must be **live on the production domain** before this can start ⇒ deploy
+  ordering matters; build slack into the launch calendar.
+- If the production domain isn't finalized, the consent-screen registration cannot complete.
+
+**Account-deletion correctness (the high-risk surface):**
+- **JWT session strategy (`auth.ts:26`) means there is no server-side session to invalidate.** A
+  deleted user's already-issued JWT stays cryptographically valid until expiry. Mitigation to weigh:
+  short session lifetime, or a deleted-user check in the auth `session` callback (lookup user;
+  invalidate if gone — note this adds a DB read per request).
+- **`Event.userId` orphan scrub** must be inside the same transaction as the user delete, or a crash
+  mid-delete leaves dangling identity links. No FK enforces this — easy to forget.
+- **Host of an active room:** `Room` has no `userId` FK; deleting a user removes their `Member` row
+  but the room persists (auto-expires later). Acceptable, but the deletion path must not throw on
+  in-flight rooms/votes. Confirm cascade through `Member` → `Vote`/`WatchedMovie` doesn't deadlock
+  with the room cleanup cron.
+- **OAuth token disposal:** deleting the `Account` row removes our stored Google `refresh_token`/
+  `access_token`, but does **not** revoke Google's grant. Optional best practice: call Google's token
+  revocation endpoint on delete. Decide in/out of scope.
+- **Authorization:** the delete must derive the target strictly from the authenticated session
+  (`requireUserId()`), never from a client-supplied id — else it becomes an account-deletion IDOR.
+  Add a type-to-confirm step + rate-limit (fail-closed) to prevent accidental/abusive deletion.
+- **Idempotency / partial failure:** re-deleting or deleting a half-deleted account should be safe.
+
+**Privacy-policy truthfulness:**
+- The policy's retention claims must match reality (rooms: ~24h grace cron; events: 90d; account data:
+  until deletion). Any promise we can't keep is itself a violation.
+- **Residual email exposure** (carried from WP1b): `listFriends`/`GET /api/friends` still returns
+  `email` for established friends. Not enumeration, but the policy must accurately describe what
+  friends can see, or we close it here. (Decision — likely just disclose.)
+
+**Cookie/analytics consent (legal ambiguity):**
+- Strictly-necessary cookies need no consent. The **first-party, no-IP, pseudonymous analytics** is a
+  gray area under EU ePrivacy: defensible as legitimate-interest with disclosure + opt-out, but a
+  strict reading wants prior consent. Choosing "disclose + honor opt-out, no banner" is the
+  pragmatic default; a banner is the conservative option. **Owner risk decision.**
 
 ---
 
-## 5. Assumptions & Open Questions
+## 5. Assumptions & Open Questions (gate PLAN — owner/decision inputs)
 
-Direction was pre-decided (OQ1/OQ2), so the genuine unknowns are just tunable constants:
+**Owner-supplied facts — RESOLVED / PLACEHOLDER (2026-06-21):**
+1. **Data-controller / legal identity → "Alexander Smith"** (individual). Named in privacy policy + ToS.
+2. **Contact email → PLACEHOLDER** (`[PRIVACY_CONTACT_EMAIL]`). Still unknown; insert as a placeholder
+   token throughout the pages/policy so a single find-replace fills it at launch.
+3. **Governing-law jurisdiction → State of Florida, USA.** ToS governing-law + venue clause.
+4. **Production domain → PLACEHOLDER** (`[PROD_DOMAIN]`). Still unknown. **Launch prerequisite, not a
+   drafting blocker** — pages/deletion flow/plan are written domain-agnostic with the placeholder; the
+   domain-dependent steps (Google consent-screen verification, `AUTH_URL`, `metadataBase`, published
+   policy URLs) are called out as a **pre-launch checklist**, not IMPLEMENT-cycle code.
+   - **Product name: "PikFlix"** is a **working name and may change before launch** — treat the brand
+     string as a single source-of-truth constant where practical so a rename is cheap.
 
-- **A1:** Non-member room payload = `{ code, name, status, expired, currentMemberId: null,
-  isCurrentUserHost: false }`. Member payload is unchanged from today. *(Assumed from OQ1.)*
-- **A2:** `roomGet` = **60/min/IP**, fail-open; `userSearch` = **30/min/user**, fail-open.
-  *(Proposed defaults — tunable in PLAN; not blocking.)*
-- **A3:** `searchUsers` min length = **2**; email match = exact case-insensitive `equals`; result
-  shape = `{ id, displayName }`. *(Assumed from OQ2.)*
-- **A4:** Keep `email` in `listFriends`/`PublicUser` (friends list); only the **search** path drops
-  it. *(Scope decision — flagged in §4/§6.)*
-- **OQ-b1 (non-blocking):** are the proposed limits (A2) acceptable, or tighter for `roomGet`?
-  Default to A2 unless the user prefers otherwise at plan-approval.
+**Design decisions — RESOLVED with the user 2026-06-21:**
+5. **v1 auth surface → BOTH (Google + email/password).** ⇒ the Google consent-screen registration +
+   brand/domain verification **IS a hard v1 launch blocker**; deploy ordering must put `/privacy` +
+   `/terms` live on the production domain **before** verification can start.
+6. **Deletion UX → self-serve in-app button (auth-gated, type-to-confirm) + documented email
+   fallback.** Satisfies Google's "in-app option AND web-accessible request" requirement.
+7. **Cookie/analytics consent → disclose + honor opt-out, no banner.** Treat first-party no-IP
+   analytics as legitimate interest; IMPLEMENT adds a localStorage opt-out flag + `track()`/`flush()`
+   guard + a settings toggle (see §2).
+8. **Regulatory coverage → one policy covering GDPR + CCPA/CPRA generically.**
+
+**Still on recommended defaults (proceed unless corrected at plan-approval):**
+9. **Minimum age** — state a **13+** minimum (COPPA floor; 16 if targeting EU minors conservatively).
+10. **Google token revocation on delete** — local token deletion only for v1 (deleting the `Account`
+    row); calling Google's revocation endpoint is a noted follow-up.
+
+**Owner-supplied facts (items 1–4 above) remain the only hard blocker to PLAN.**
+
+**Assumptions (will proceed on these unless corrected):**
+- Self-serve **data export/portability** is **not** built as code in WP6 — the policy commits to a
+  manual email-based fulfillment of access/portability requests (revisit later).
+- No schema/migration change is needed (deletion uses existing nullable `Event.userId` + cascade FKs).
+- The deleted-user JWT-invalidation hardening is in scope to *evaluate*; whether to add the per-request
+  DB check is a PLAN decision (perf trade-off).
 
 ---
 
-## 6. Out of Scope
+## 6. Out of Scope (explicitly excluded from this cycle)
 
-- Lengthening or changing the room-code format (`lib/room-code.ts`) — OQ1 explicitly keeps the short
-  code; no code change there.
-- Dropping `email` from `listFriends` / `GET /api/friends` (the unrendered friends-list email) —
-  lower-risk residual, deferred.
-- Any schema/migration change, Redis/Upstash, CAPTCHA, or new dependency.
-- Other work packages: WP2 (headers/CSP), WP3 (Sentry), WP5 (env fail-fast), WP6 (privacy), WP7
-  (ops/backup runbooks), WP8 (`next` 16).
-- Auth/session logic (`auth.ts`, `app/api/auth/`) — untouched.
-
----
-
-## 7. Readiness Verdict: READY FOR PLANNING
-
-All call sites confirmed against current code: the only consumer needing a change is the lobby
-(`app/room/[code]/lobby/page.tsx`); `done`/`setup`/`HostFilterEditor` are already null-safe; the
-existing GET test passes unchanged; the `searchUsers` test is updated in-scope. The query-shape
-decision (keep `room.findUnique({include})`) is dictated by the existing mock. Design decisions are
-settled (OQ1/OQ2); only tunable limits remain (A2), which are not blocking. Ready to advance to PLAN.
+- **Actual Google Cloud Console configuration** (consent screen + domain verification) — owner action,
+  not committable code; WP6 produces the pages/URLs it consumes.
+- **Self-serve data-export/portability API** — deferred; satisfied via documented manual process.
+- **A full cookie-consent banner** — excluded unless decision (7) selects the banner option.
+- **Closing the WP1b residual** `GET /api/friends` email exposure as a *code* change — default is to
+  disclose it in the policy, not re-engineer it here (revisit if the owner prefers removal).
+- **WP2** (security headers/CSP), **WP3** (Sentry), **WP5** (env fail-fast incl. `AUTH_URL`/secret
+  assertion), **WP7** (deploy + backup/restore runbooks — incl. the still-open Supabase Free-plan
+  backup gap), **WP8** (next 16). Cross-WP note: WP5's `AUTH_URL`/prod-env work and WP6's domain need
+  are coupled — sequence them together when the domain is known.
 
 ---
 
-# Research — Fix: cap the Postgres connection pool for serverless
+## 7. Readiness Verdict
 
-## 1. Requirements Summary
+**Technical approach: READY FOR PLANNING.** The code-side surface is fully mapped — the pages, the
+footer/consent links, the `DELETE /api/account` transaction (cascade + `Event.userId` scrub), and the
+deletion UI all reuse existing patterns with **no new dependencies and no migration**. All
+launch-blocking privacy requirements are identified (C1 pages + Google consent registration; M9
+deletion + event scrub; verified against Google's current OAuth + User-Data policies).
 
-Production `/admin` (and the app under load) 500s with Postgres
-`XX000 (EMAXCONNSESSION) max clients reached in session mode - pool_size: 15`. Root cause:
-`lib/prisma.ts` creates `new Pool({ connectionString })` with **no `max`**, so the `pg` driver
-defaults to **10 connections per pool**. On Vercel each serverless instance holds its own pool,
-so a few warm instances blow past the pooler's client cap. The admin overview
-(`getOverviewMetrics`) fans out ~8 `count`/`$queryRaw` queries via `Promise.all`, so it's the
-first thing to exhaust the pool. **Fix B:** cap the per-instance pool to 1 connection.
-(**Fix A**, switching `DATABASE_URL` to Supabase's transaction-mode pooler on port 6543, is an
-env change the user owns — out of scope for this code change.)
-
-## 2. Stack Choices
-
-- The project uses the Prisma **driver adapter** (`@prisma/adapter-pg` + `pg` `Pool`), so pool
-  sizing is controlled by the `pg` `Pool`'s `max` option in code — the URL's `connection_limit`
-  param is **not** honored by `pg`. So the fix lives in `lib/prisma.ts`: `new Pool({ ..., max: 1 })`.
-- One connection per instance is the standard serverless value; paired with a transaction-mode
-  pooler (Fix A) it scales cleanly without pinning sessions.
-
-## 3. Environment Verification
-
-- `lib/prisma.ts`: `new Pool({ connectionString: process.env.DATABASE_URL })` → `PrismaPg` adapter
-  → `PrismaClient`. No `max` today.
-- Error confirms `DATABASE_URL` currently points at the **session-mode** pooler (port 5432).
-- Local dev: `max: 1` is harmless (single-user); the dev `globalForPrisma` reuse is unchanged.
-
-## 4. Risks & Edge Cases
-
-- **Within-instance serialization:** with `max: 1`, concurrent queries on one instance queue
-  through a single connection. Most routes already `await` sequentially; the admin `Promise.all`
-  counts will serialize (slightly slower page, not an error). Acceptable, and the proper remedy
-  is Fix A (transaction pooler), not a bigger per-instance pool.
-- **Throughput:** Vercel functions handle ~one request at a time per instance, so `max: 1`
-  rarely bottlenecks; more instances scale out horizontally.
-- Does **not** by itself raise the session-pooler 15 cap — Fix A is still required for headroom.
-  This change bounds each instance to 1 connection so the cap is hit far later.
-
-## 5. Assumptions & Open Questions
-
-- User applies **Fix A** (DATABASE_URL → transaction pooler, port 6543) in Vercel; this code
-  change is the complementary hardening. No blocking questions.
-
-## 6. Out of Scope
-
-- The Vercel env change (Fix A). Reducing the admin overview's query fan-out. Any broader
-  Prisma/datasource refactor.
-
-## 7. Readiness Verdict: READY FOR PLANNING
+**Design decisions 5–8 are RESOLVED** (2026-06-21): launch with both auth methods (Google verification
+is a v1 blocker), self-serve + email-fallback deletion, disclose-+-opt-out analytics, GDPR+CCPA
+coverage. **Owner facts resolved** (controller = Alexander Smith, jurisdiction = Florida) **with two
+launch-time placeholders** — `[PROD_DOMAIN]` and `[PRIVACY_CONTACT_EMAIL]`. Per the user's direction,
+these placeholders do **not** block drafting the pages, the deletion flow, or the plan; the
+domain-dependent items (Google OAuth verification, `AUTH_URL`, `metadataBase`, published policy URLs)
+are documented as **launch prerequisites**. **READY TO ADVANCE TO PLAN.**

@@ -2,6 +2,41 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-21 — WP6: Privacy & data lifecycle (privacy/terms + account deletion)
+
+**Prompt (summary):** Begin **WP6** (the C1 launch blocker) in RESEARCH-only, then proceed to
+planning/implementation. Publish `/privacy` + `/terms`, add a self-serve account-deletion flow with an
+email fallback, and disclose first-party analytics with an opt-out (no consent banner). Resolved with
+the owner: data controller = **Alexander Smith**, governing law = **Florida**, launch auth = Google +
+email/password, coverage = **GDPR + CCPA/CPRA**; production domain + privacy contact email left as
+**placeholders** (domain-dependent Google OAuth verification / `AUTH_URL` / `metadataBase` called out
+as launch prerequisites, not drafting blockers). Review asks: document the deletion rate-limit
+fail-open rationale, verify + test the host/room-ownership edge cases, expand the deletion test
+matrix, and centralize the placeholders.
+
+**Approach:** Migration-free, dependency-free. **C1** — `app/privacy/page.tsx` + `app/terms/page.tsx`
+as static (non-async) server components covering GDPR + CCPA rights, sub-processors (Supabase/Vercel/
+Google/TMDB + TMDB attribution), retention (events 90d, rooms ~24h, account-until-deletion), 13+, and
+the analytics opt-out; legal identity centralized in **`lib/legal.ts`** (the only code-literal
+placeholder `PRIVACY_CONTACT_EMAIL`; `[PROD_DOMAIN]` is env-only via `NEXT_PUBLIC_SITE_URL`); brand in
+**`lib/brand.ts`**; `BrandFooter` + signup/signin consent lines link both. **M9** — `DELETE
+/api/account` (auth-only target, no IDOR), one ordered `$transaction`: scrub `Event.userId`→null →
+`member.deleteMany` (cascades votes/watched; precedes user delete so `Member.userId`'s default SetNull
+can't orphan rows) → `user.deleteMany` (idempotent; cascades Account/Friendship/preferences); new
+fail-open `accountDelete` limiter scope (5/hr/user — erasure is a right, op is auth-gated + idempotent).
+`DeleteAccountSection` (type-to-confirm → DELETE → `signOut`) + `AnalyticsOptOut`
+(`useSyncExternalStore` over a localStorage flag) mounted in profile settings; `track()` early-returns
+when opted out (server login events bypass, disclosed). `metadataBase` wired to `NEXT_PUBLIC_SITE_URL`.
+Verified host-deletion behavior (no transfer logic; host-less/empty rooms go inert and auto-expire
+≤48h via the existing cron) and documented + tested it.
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + **333 Jest tests (53 suites, +28)**,
+drift-free. New tests: account-delete route (401/429/credential/Google/scrub-ordering/host-safe/
+last-member-safe/idempotent/500), analytics opt-out (suppression + persistence-across-reload), delete
+UI confirm-gating, and the legal surface (privacy/terms content + footer + signup/signin consent).
+Research/plan in `docs/research.md` + `docs/plan-wp6-privacy-legal.md`. Launch prerequisites
+(`[PROD_DOMAIN]`, `PRIVACY_CONTACT_EMAIL`, Google consent-screen verification) tracked in the plan §6.
+
 ## 2026-06-21 — WP1b: Enumeration / UX hardening
 
 **Prompt (summary):** After opening the WP1a PR (#22, rebased standalone onto `main`), continue with

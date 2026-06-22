@@ -5,6 +5,8 @@
 import type { EventType } from './analytics-events'
 
 const ANON_KEY = 'pikflix_anon'
+// WP6: per-device opt-out of first-party analytics (disclosed in /privacy, toggled in settings).
+const OPTOUT_KEY = 'pikflix_analytics_optout'
 
 interface OutEvent {
   type: EventType
@@ -39,6 +41,27 @@ export function getAnonId(): string {
     localStorage.setItem(ANON_KEY, id)
   }
   return id
+}
+
+/** True when the user has opted out of first-party analytics on this device. SSR-safe. */
+export function isAnalyticsOptedOut(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return localStorage.getItem(OPTOUT_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+/** Persist the analytics opt-out preference (localStorage; survives reloads). SSR-safe. */
+export function setAnalyticsOptOut(optedOut: boolean): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (optedOut) localStorage.setItem(OPTOUT_KEY, '1')
+    else localStorage.removeItem(OPTOUT_KEY)
+  } catch {
+    // best-effort; the toggle must never throw into the UI
+  }
 }
 
 export function flush(): void {
@@ -79,6 +102,10 @@ export function track(
   ctx?: { roomId?: string; memberId?: string },
 ): void {
   if (typeof window === 'undefined') return
+  // WP6: honor the per-device analytics opt-out (disclosed in /privacy). When opted out we drop
+  // the event entirely — nothing is buffered or sent. Server-side login events
+  // (lib/login-event.ts) are security/audit and intentionally bypass this client opt-out.
+  if (isAnalyticsOptedOut()) return
   // clientTs preserves ordering within a single flushed batch; the server's ts is
   // authoritative for everything else.
   buffer.push({ type, props, ...ctx, clientTs: Date.now() })

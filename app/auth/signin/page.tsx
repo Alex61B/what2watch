@@ -148,6 +148,17 @@ function SignInForm() {
 
         {/* Footer links */}
         <div className="text-center space-y-2 text-sm text-muted">
+          <p className="text-xs text-faint">
+            By continuing you agree to our{' '}
+            <Link href="/terms" className="underline hover:text-ink transition-colors">
+              Terms
+            </Link>{' '}
+            and{' '}
+            <Link href="/privacy" className="underline hover:text-ink transition-colors">
+              Privacy Policy
+            </Link>
+            .
+          </p>
           <p>
             Don&apos;t have an account?{' '}
             <Link href="/auth/signup" className="text-indigo-400 hover:text-indigo-300">
