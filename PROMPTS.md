@@ -26,6 +26,25 @@ change, no new dependency. Research/plan in `docs/research.md` + `docs/plan-wp1a
 new), drift-free. New/extended tests: login-throttle (3), member-cap (2), fail-closed limiter (2),
 events IP-key + id-bound (2), vote type-guard + throttle (2), DECLINED cooldown (2), signup fail-closed scope (1).
 
+## 2026-06-20 — Fix: cap the Postgres connection pool for serverless
+
+**Prompt (summary):** Prod `/admin` 500'd with `XX000 (EMAXCONNSESSION) max clients reached in
+session mode - pool_size: 15`. Diagnosed as DB connection exhaustion, not an admin bug.
+Fix A (switch `DATABASE_URL` to the transaction-mode pooler on port 6543) is the user's Vercel
+change; **Fix B** (this) caps the per-instance pool.
+
+**Root cause:** `lib/prisma.ts` built `new Pool({ connectionString })` with no `max`, so the pg
+driver defaulted to 10 connections per pool. Each Vercel instance holds its own pool, so a few
+warm instances exceed the pooler's client cap; the admin overview's `Promise.all` of ~8
+`count`/`$queryRaw` queries surfaced it first.
+
+**Fix:** `new Pool({ connectionString, max: 1 })` — one connection per instance (the driver
+adapter sizes the pool in code; the URL's `connection_limit` is ignored by pg). New
+`__tests__/lib/prisma.test.ts` locks the bounded pool (TDD; mocks pg/adapter, asserts `max`).
+
+**Verification:** `scripts/verify.sh` green — typecheck + lint + 284 Jest tests (46 suites).
+Pairs with Fix A (transaction pooler) for real headroom.
+
 ## 2026-06-18 — M1: Operational Floor (production hardening)
 
 **Prompt (summary):** After an architecture review of the next improvement milestones,

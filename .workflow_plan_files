@@ -14,3 +14,5 @@ __tests__/api/votes.test.ts
 __tests__/lib/friends.test.ts
 __tests__/api/member-cap.test.ts
 __tests__/api/auth-login-throttle.test.ts
+lib/prisma.ts
+__tests__/lib/prisma.test.ts
