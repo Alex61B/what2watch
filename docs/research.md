@@ -1,214 +1,223 @@
-# RESEARCH — WP2: HTTP Security Headers & CSP Hardening (PikFlix / What2Watch)
+# RESEARCH — WP7: Operational Recovery & Runbooks (PikFlix / What2Watch)
 
-> **State:** RESEARCH (read-only). No application code touched. This document **supersedes** the
-> prior WP6 research content; WP6's durable record is `docs/plan-wp6-privacy-legal.md` +
-> `docs/session-handoff-2026-06-22.md`.
-> **Audit findings in scope:** **H4** (no HTTP security headers, no Content-Security-Policy) and —
-> *pending the scope decision in §5* — **M4** (`lib/tmdb.ts` is not `server-only`; a client import
-> pulls the TMDB fetch module into the browser bundle).
-> **Source:** 2026-06-21 production-readiness audit; next code cycle per
-> `session-handoff-2026-06-22.md` §4/§7 ("WP2 is the only remaining pure-code WP with zero external
-> dependency").
+> **State:** RESEARCH (read-only). **Docs-only WP** — no application source code is touched in any
+> state of this cycle (owner constraint 2026-06-22). Supersedes the prior WP6 research content; WP6's
+> durable record is `docs/plan-wp6-privacy-legal.md` + `docs/session-handoff-2026-06-22.md`.
+> **Audit findings in scope:** **H8** (no backup/restore/DR runbook; restore untested — the top
+> operational risk), **H7** (prod migrations applied manually / undocumented; no `migrate deploy` in
+> the build), **M12** (no rollback runbook / expand-contract discipline).
+> **Source:** 2026-06-21 production-readiness audit + `session-handoff-2026-06-22.md` §5 ("top
+> operational risk: Supabase Free = no managed backups").
 
 ---
 
 ## 1. Requirements Summary
 
-**What WP2 delivers and why.** The app currently ships **no HTTP security headers and no
-Content-Security-Policy** (verified: `next.config.ts` sets only `images.remotePatterns`; there is no
-`middleware.ts`; a repo-wide search for `Content-Security-Policy`/`X-Frame-Options`/
-`Strict-Transport-Security`/`headers()` returns nothing). Every response is therefore served with
-browser defaults — no clickjacking protection, no MIME-sniff protection, no transport pinning, no
-referrer control, no script/connect allow-listing. This is **audit finding H4** and the last
-HTTP-layer gap after the WP1 abuse/enumeration work and the WP6 privacy work.
+**What WP7 delivers and why.** The application has **no operational recovery documentation and no
+backups**. If the Postgres database is lost, corrupted, or a row is deleted by mistake, there is
+currently **no way to recover** — the production data store (Supabase, **Free plan**) has no managed
+daily backups and no point-in-time recovery, and no manual export process exists. This is the single
+largest remaining production risk after the WP1/WP6 security & privacy work.
 
-Two logically separable deliverables (the H4/M4 split is the central scope question — see §5):
+WP7 is a **documentation-only** work package that produces the operational runbooks the project needs
+before a real-user launch. Deliverables (one markdown file each, under `docs/runbooks/`):
 
-1. **H4 — Security response headers + a phased CSP.**
-   - Add the standard static security headers to **all** responses (enforced immediately, no breakage
-     risk): `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options` (and/or CSP
-     `frame-ancestors`), `Referrer-Policy`, `Permissions-Policy`.
-   - Introduce a **Content-Security-Policy in Report-Only mode first** (see "phasing" below), tuned to
-     the app's real resource graph (TMDB images, self-hosted fonts, first-party analytics), observe
-     violations, then flip to enforce in a later cycle.
+1. **Backup/restore runbook** — how to take and verify logical backups, and how to restore. Includes
+   the **Supabase Free-plan backup-gap mitigation** (scheduled `supabase db dump` / `pg_dump` to
+   off-site encrypted storage; GitHub Actions automation template) and the upgrade path (Supabase Pro
+   managed daily backups + optional PITR).
+2. **Disaster-recovery (DR) runbook** — scenario playbooks: total DB loss, accidental data deletion,
+   Supabase outage, Vercel outage, leaked secret/credential rotation, with step-by-step recovery and
+   RPO/RTO targets per scenario.
+3. **Operations runbook (index)** — system overview (Vercel + Supabase + cron), environments,
+   ownership/on-call basics, the **RPO/RTO recommendations**, the **launch-blocker classification**,
+   and links to the other runbooks.
+4. **Release / rollback procedure** — the deploy flow, **how migrations are actually applied** (Prisma
+   `migrate deploy` via `DIRECT_URL` — H7), **expand/contract discipline**, Vercel **Instant Rollback**,
+   and the DB-rollback caveats (M12).
+5. **Incident triage checklist** — severity levels, the first-15-minutes checklist, where to look
+   (Vercel runtime logs, Supabase logs, `/api/health`), escalation and comms.
 
-2. **M4 — `server-only` TMDB split** *(in scope only if the §5 decision keeps it here).*
-   - Split `lib/tmdb.ts` into a server-only fetch module (add `import 'server-only'`; keep
-     `tmdbFetch`/`discoverMovies`/`getMovieById`/`getWatchProviders`) and a client-safe module
-     (constants/types/pure helpers: `TMDB_GENRES`, `STREAMING_SERVICES`, `DEPTH_BANDS`, `ServiceId`,
-     `buildStreamingUrl`, `parseMovieResult`, `parseWatchProviders`). Repoint the 4 client importers.
-
-**Why phase the CSP (immediate vs. report-only — the key H4 question).** A strict enforced CSP would
-**break the app on contact** because:
-- `app/layout.tsx:39` injects a **static inline `<script>`** (the theme-no-flash init) via
-  `dangerouslySetInnerHTML`. A strict `script-src 'self'` blocks inline scripts unless they carry a
-  matching **hash** or per-request **nonce**.
-- Next.js App Router injects its **own inline bootstrap/hydration scripts**; a strict policy needs a
-  per-request **nonce via `middleware.ts`** (which opts routes into dynamic rendering) or a blanket
-  `'unsafe-inline'` (which defeats the point).
-- We have **no production telemetry** on what real browsers actually request.
-
-Therefore the safe, reversible path is: **enforce the static headers now + ship CSP as
-`Content-Security-Policy-Report-Only`**, collect violation reports, then enforce in a follow-up.
-Report-Only never blocks a single request, so it is safe to deploy immediately.
+**Why now / why these:** WP7 is owner-operated infrastructure documentation — it closes the recovery
+gap without any code change, and it is the one remaining work package the handoff flags as the *top*
+operational risk. The runbooks also make every later change safer (a tested restore + a rollback
+procedure de-risk WP3/WP5/WP8).
 
 ---
 
-## 2. Stack Choices (leverage existing patterns)
+## 2. Stack Choices (mechanisms to leverage, with current vendor docs)
 
-- **Delivery mechanism — `async headers()` in `next.config.ts` (recommended for this cycle).**
-  Static headers and a **static Report-Only CSP** map cleanly onto Next's `headers()` config. This is
-  the smallest change, requires **no `middleware.ts`**, and does **not** opt the app out of static
-  rendering. `next.config.ts` is a tracked *root application file* (per `AGENTS.md`) and is **not** on
-  the "Restricted Areas" list, so it is editable under the normal PLAN→IMPLEMENT gate.
-  - *Deferred to the enforce phase:* a `middleware.ts` that mints a per-request nonce. Nonces are only
-    needed once we flip CSP to **enforce**; they are out of scope for a Report-Only first cycle.
-- **Inline theme script:** it is **static**, so a `sha256-…` hash in `script-src` is the clean,
-  nonce-free way to allow exactly it. (The hash is computed over the exact bytes of `themeInitScript`;
-  computed during IMPLEMENT.)
-- **CSP violation collection:** add a first-party **`app/api/csp-report/route.ts`** that accepts the
-  `application/csp-report` (and `application/reports+json`) POST and logs it — mirroring the existing
-  first-party `/api/events` ingest pattern (`lib/analytics.ts` → `/api/events`). Keeps reports
-  in-house, no third-party collector, no new dependency. (Endpoint is a new file → belongs in the PLAN
-  manifest.)
-- **Apply CSP in production only.** Dev (HMR / React Fast Refresh) requires `'unsafe-eval'` and a
-  `ws:`/`connect-src` websocket; gate the CSP header on `process.env.NODE_ENV === 'production'` so the
-  dev server is unaffected. Static headers (HSTS etc.) can apply in all environments.
-- **No new runtime dependencies.** Everything uses Next's built-in `headers()` + a plain route
-  handler. (Consistent with the audit's "migration-free, dependency-free" WP cadence.)
-
----
-
-## 3. Environment Verification (the app's real resource graph)
-
-Confirmed by reading the code — the CSP must allow exactly these and nothing more:
-
-| Resource class | Where it comes from | CSP directive implication |
-|---|---|---|
-| **Movie posters / provider logos** | `https://image.tmdb.org/t/p/…` — 3 raw `<img src={m.posterUrl}>` (`MovieListClient`, `SharedSessionClient`, `FriendDetailClient`) + 2 `next/image` (`VotingCard`, `MatchResult`). `next.config.ts` allow-lists `image.tmdb.org`. | `img-src 'self' https://image.tmdb.org data:` (raw `<img>` hit TMDB directly; `next/image` proxies via same-origin `/_next/image`; `data:` covers blur/placeholder URIs) |
-| **Fonts** | `next/font/google` (`Inter`, `Playfair_Display`) — **self-hosted at build**, served from `/_next/static/media/*`. No runtime call to `fonts.googleapis.com`/`fonts.gstatic.com`. | `font-src 'self'` — **no Google Fonts domains needed** |
-| **First-party analytics** | `lib/analytics.ts` → `sendBeacon`/`fetch('/api/events')` (same-origin). No GA/gtag/Vercel Analytics/Plausible/PostHog anywhere. | `connect-src 'self'` |
-| **Google OAuth sign-in** | `auth.ts` (NextAuth 5, Google + Credentials). Sign-in is a **top-level 302 redirect** to `accounts.google.com`; NextAuth POSTs to same-origin `/api/auth/*`. **Not** a fetch, XHR, or iframe. | `form-action 'self'`, `frame-src 'none'` — **no Google domains needed**. (CSP does not govern top-level navigations.) |
-| **Google avatars** | **Not rendered** — repo search for `user.image`/avatar rendering returns nothing. (If avatars are added later, `img-src` + `next.config` `remotePatterns` would need `lh3.googleusercontent.com`.) | none today |
-| **Inline `<script>`** | `app/layout.tsx:39` theme-init via `dangerouslySetInnerHTML` (static). | needs `script-src` **hash** (or nonce in enforce phase) |
-| **Inline styles** | Tailwind compiles to a same-origin stylesheet, but `next/font`/Next may inject inline `<style>`. | likely `style-src 'self' 'unsafe-inline'` (style nonces are impractical; confirm via Report-Only) |
-| **iframes / objects / workers** | None found. | `frame-src 'none'`, `object-src 'none'`, `base-uri 'self'` |
-| **Third-party hosts (any)** | **None.** Repo search for `googleusercontent`/`youtube`/`fonts.g*`/`gtag`/`cdn.*`/`unpkg`/`jsdelivr` → no matches in `app/`, `components/`, `lib/`. | clean — no external allow-list entries |
-
-**Proposed initial CSP (Report-Only target):**
-```
-default-src 'self';
-script-src 'self' 'sha256-<theme-init-hash>';
-style-src 'self' 'unsafe-inline';
-img-src 'self' https://image.tmdb.org data:;
-font-src 'self';
-connect-src 'self';
-frame-ancestors 'none';
-frame-src 'none';
-form-action 'self';
-base-uri 'self';
-object-src 'none';
-upgrade-insecure-requests;
-report-uri /api/csp-report; report-to csp-endpoint;
-```
-
-**Proposed static (enforced) headers:**
-`Strict-Transport-Security: max-age=63072000; includeSubDomains; preload` ·
-`X-Content-Type-Options: nosniff` · `X-Frame-Options: DENY` ·
-`Referrer-Policy: strict-origin-when-cross-origin` ·
-`Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()`
+- **Logical backups — Supabase CLI `supabase db dump` (preferred) or `pg_dump`.** `supabase db dump`
+  runs `pg_dump` in a container, excludes Supabase-managed schemas (`auth`/`storage`/extensions),
+  strips reserved roles, and adds idempotent `IF NOT EXISTS` clauses; `--data-only` / `--role-only`
+  control contents; needs `supabase link` (or `--db-url`) and Docker. Raw `pg_dump` against
+  `DIRECT_URL` also works and needs no Docker (simplest for a GitHub Action). For **Free-tier
+  projects, Supabase explicitly recommends regular `db dump` exports kept off-site.** Sources:
+  [Backup & Restore via CLI](https://supabase.com/docs/guides/platform/migrating-within-supabase/backup-restore),
+  [`supabase db dump`](https://supabase.com/docs/reference/cli/supabase-db-dump),
+  [Database Backups](https://supabase.com/docs/guides/platform/backups).
+- **Backup automation — GitHub Actions.** Supabase documents a CI backup workflow; this is the right
+  home for automation here (a scheduled GH Action running `pg_dump`/`supabase db dump` → encrypted
+  off-site store) because **Vercel cron cannot run `pg_dump`** (serverless runtime, no Postgres client
+  binary, execution-time limits). Source:
+  [Automated backups using GitHub Actions](https://supabase.com/docs/guides/deployment/ci/backups).
+  *(WP7 documents and templates this workflow; actually committing `.github/workflows/*` + setting the
+  DB secret is an owner action, out of this docs-only WP — see §5/§6.)*
+- **Managed backups / PITR (upgrade path) — Supabase Pro.** Daily backups are included on Pro/Team/
+  Enterprise; **PITR is a paid add-on (~$100/mo per 7-day retention, up to 28 days)**; Free has
+  neither. Sources:
+  [Database Backups](https://supabase.com/docs/guides/platform/backups),
+  [PITR usage](https://supabase.com/docs/guides/platform/manage-your-usage/point-in-time-recovery),
+  [Pricing](https://supabase.com/pricing).
+- **Restore** — `psql`/`supabase db` restore of a dump into a **scratch project first** (never prod),
+  per the CLI backup-restore guide above + [Restoring a downloaded backup](https://supabase.com/docs/guides/local-development/restoring-downloaded-backup).
+- **Release rollback — Vercel Instant Rollback.** Revert prod to a previous deployment via the
+  dashboard (⋮ → Instant Rollback) or `vercel rollback <url|id>`; **Hobby plan can roll back to the
+  *previous* deployment only** (Pro/Enterprise: any eligible one). After a rollback Vercel disables
+  prod-domain auto-assignment until you `vercel promote`. Sources:
+  [Instant Rollback](https://vercel.com/docs/instant-rollback),
+  [Rolling back production](https://vercel.com/docs/deployments/rollback-production-deployment),
+  [`vercel rollback`](https://vercel.com/docs/cli/rollback),
+  [Promoting deployments](https://vercel.com/docs/deployments/promoting-a-deployment).
+- **DB migrations — Prisma, not Supabase CLI.** Confirmed live: the schema is tracked in
+  `_prisma_migrations` (Supabase's own `list_migrations` is empty). Apply with
+  `./node_modules/.bin/prisma migrate deploy` against `DIRECT_URL` (never bare `npx prisma` → pulls v7,
+  breaks this v6 project, see [[reference-prisma-migrate-local-cli]]). Code rollback is easy (Vercel);
+  **DB rollback is the hard part** — Prisma has no auto down-migrations, so the runbook prescribes
+  **expand/contract** (additive-then-cleanup) so a code rollback never needs a schema rollback.
+- **Doc format/structure:** plain markdown under a new `docs/runbooks/` folder, cross-linked from a
+  `README.md` index. No new dependency, no tooling.
 
 ---
 
-## 4. Risks & Edge Cases
+## 3. Environment Verification (confirmed against the live system)
 
-- **CSP enforced too early → blank/broken app.** Mitigated: Report-Only first. Report-Only emits
-  violation reports but **blocks nothing**, so it is safe to deploy. Enforce is a separate, later
-  decision driven by observed reports.
-- **Dev HMR breakage.** React Fast Refresh needs `'unsafe-eval'` + a websocket `connect-src`. Mitigated:
-  gate the CSP header to `NODE_ENV === 'production'`.
-- **Hash drift.** If the inline theme script's bytes change, its `sha256` must be regenerated or the
-  script silently fails (in enforce) / reports (in Report-Only). Note in the IMPLEMENT step; keep the
-  hash adjacent to the script or document the regenerate step.
-- **`next/image` vs raw `<img>` for posters.** `next/image` proxies through same-origin
-  `/_next/image`, but the 3 raw `<img>` load `image.tmdb.org` **directly** — so `img-src` MUST include
-  `https://image.tmdb.org` (dropping it would break posters on the list/shared/friend views).
-- **HSTS `preload` is sticky.** `includeSubDomains; preload` is hard to undo and affects all
-  subdomains. Acceptable for a single production domain, but call it out for owner awareness; can ship
-  without `preload` first if the domain strategy is unsettled.
-- **`Permissions-Policy` over-restriction.** The app uses none of camera/mic/geo, so denying them is
-  safe; keep the list to features we can prove unused.
-- **Report endpoint as a noise/abuse sink.** `/api/csp-report` is unauthenticated by nature (browsers
-  post to it). Mitigate with a body-size cap and best-effort logging (drop on error), mirroring the
-  `/api/events` fail-open posture; consider reusing the existing rate-limit primitive from WP1a.
-- **M4 (if in scope): no behavior change expected, but broad import churn.** The split repoints
-  imports across 4 client + several server files; risk is purely mechanical (wrong import path →
-  typecheck failure, caught by `verify.sh`). The secret value does **not** currently leak (see §5), so
-  there is no live regression to guard against — only build-graph hygiene.
+- **Hosting = Vercel; one cron.** `vercel.json` defines a single cron `GET /api/cron/cleanup` at
+  `0 4 * * *` (04:00 UTC daily). Deploys are git-push driven (no `vercel.json` build override).
+- **Build does NOT run migrations.** `package.json` build = `prisma generate && next build` — **no
+  `prisma migrate deploy`** ⇒ migrations are applied **out-of-band, manually** (confirms **H7**).
+- **DB = Supabase Postgres, dual-URL.** `schema.prisma` datasource: `url = DATABASE_URL` (pooled,
+  runtime; capped to 1 conn/instance per `lib/prisma.ts`), `directUrl = DIRECT_URL` (direct;
+  migrations). `prisma.config.ts` builds the migration adapter from `DIRECT_URL ?? DATABASE_URL` and
+  loads `.env.local` then `.env`. (Pooled vs direct matters for restore — see §4.)
+- **Live DB state (read-only MCP check, 2026-06-22):**
+  - **11/11 Prisma migrations applied, none rolled back — no drift** (`init` 2026-05-26 … `add_ratelimit`
+    2026-06-20). Production schema matches the repo.
+  - 15 public tables. Approx row counts: `User` 6, `Account` 2, `Friendship` 5, `UserMoviePreference`
+    33, `MovieCache` 26, `Event` 239, `Room`/`Member` ~1, `RateLimit` 5 (counts are `reltuples`
+    estimates). **Small, early-stage dataset** → fast dumps/restores; favors cheap logical backups now.
+- **Backup posture = NONE (the gap).** Supabase **Free** plan ⇒ no managed daily backups, no PITR
+  (verified vs current docs, §2). No manual export process exists. **Effective RPO = ∞ / RTO = ∞ for a
+  destructive event today.**
+- **Rollback posture:** Vercel Instant Rollback is available (code). No DB rollback story exists.
+- **Recovery aids that already exist:** `prisma/migrations` (schema rebuild), `prisma/seed.ts` (seed
+  data), `GET /api/health` (liveness), `/admin` overview, first-party event log. **MovieCache and
+  Event are regenerable/expendable** (TMDB re-fetch; 90-day pruned analytics).
+- **Data criticality tiers (drives RPO/RTO):**
+  - **Tier 1 — irreplaceable:** `User`, `Account` (OAuth links + `passwordHash`), `Friendship`,
+    `UserMoviePreference`, `WatchedMovie`, `User.savedServices/savedFilters`. Loss = real user harm.
+  - **Tier 2 — transient:** `Room`, `Member`, `Vote`, `RoomQueue`, `MemberQueue` (rooms auto-expire
+    ≤48h; in-flight loss is annoying, self-heals).
+  - **Tier 3 — regenerable/ephemeral:** `MovieCache` (TMDB), `Event` (90-day analytics), `RateLimit`,
+    `VerificationToken`.
+
+---
+
+## 4. Risks & Edge Cases (these shape the runbook content)
+
+- **Unrecoverable data loss (the core risk).** With no backups, accidental `DELETE`/`DROP`, a bad
+  migration, or a Supabase project deletion is **permanent**. The backup runbook + a *tested* restore
+  is the mitigation; until a backup exists, this stays the top risk.
+- **A backup you've never restored isn't a backup.** The DR runbook must mandate a **restore test into
+  a scratch project** (never prod) with a recorded "last tested" date; untested restores routinely fail
+  on roles/extensions/ownership.
+- **Dump connection target.** Take dumps against the **direct** connection (`DIRECT_URL` / port 5432),
+  not the transaction-mode pooler (6543) — pooled connections break `pg_dump`. Document explicitly.
+- **`supabase db dump` excludes managed schemas by design** — restoring into a *new* Supabase project
+  re-creates `auth`/`storage` separately; document that a full DR restore may need the managed-schema
+  handling from the Supabase restore guide, not just the public-schema dump.
+- **Secrets needed for backup/restore.** Dumps require `DIRECT_URL` (a DB credential). The runbook must
+  say: store it as a CI/secret manager entry, never in the repo; treat dump artifacts as **sensitive
+  PII** (emails, `passwordHash`) → encrypt at rest + access-controlled off-site store + retention/erase
+  policy (consistent with the WP6 privacy posture).
+- **Migration/rollback hazards (M12).** A destructive (contract) migration deployed *before* the code
+  that stops using the old column makes a Vercel code-rollback insufficient (the column is already
+  gone). Expand/contract ordering in the release runbook prevents this. Note Prisma has no built-in
+  down-migration.
+- **Vercel Hobby rollback limit.** Only the *immediately previous* deployment is one-click reversible
+  on Hobby; the runbook should note keeping known-good deployment IDs and the `vercel promote` undo.
+- **Free-tier project pausing.** Supabase pauses inactive Free projects — a relevant availability note
+  for the ops runbook (and another reason to schedule regular dumps / consider Pro).
+- **Out-of-band migrations drift risk (H7).** Because the build doesn't run `migrate deploy`, a deploy
+  whose code expects a not-yet-applied migration will 500. The release runbook must order
+  "apply migration → then deploy code" (expand) and document the drift check
+  (`prisma migrate status` against `DIRECT_URL`).
+- **Docs-only verification limit.** A pure-docs WP has no meaningful automated test; `scripts/verify.sh`
+  will pass unchanged. The real "test" of these runbooks is the owner executing a **restore drill** —
+  called out as an explicit owner acceptance step, not an automated check.
 
 ---
 
 ## 5. Assumptions & Open Questions
 
-> **Checkpoint resolutions (owner, 2026-06-22):** Q1 → **H4 only, defer M4.** Q2/Q3 → **Report-Only
-> CSP first + first-party `/api/csp-report` sink.** Recorded below.
+**Recommendations are baked into the docs (the task asked for recommendations, not gated questions).**
+The following are documented as **owner decisions with a recommended default**, not blockers:
 
-**Q1 — WP2 scope: is M4 (the `server-only` TMDB split) in this cycle? → RESOLVED: NO (H4 only).**
-- The 2026-06-21 audit/handoff bundled **H4 + M4** under "WP2 — HTTP hardening." The task framing
-  ("HTTP headers / CSP hardening only") scoped WP2 down to **H4**; **M4 is deferred to its own
-  follow-up cycle.**
-- **Finding that informed the call:** M4 is **latent, not an active leak.** `lib/tmdb.ts` reads
-  `process.env.TMDB_API_KEY` (line 88) — a **non-`NEXT_PUBLIC_`** var. Next.js **does not inline**
-  non-public env into client bundles; it substitutes `undefined`. So when `components/FilterControls.tsx`
-  imports the *value* `TMDB_GENRES` and drags the module in, the **key value never reaches the
-  browser** — only dead fetch/`Authorization`-header code does. The real win of `import 'server-only'`
-  is turning any *future* mistaken client import into a **build error** (defense-in-depth + bundle
-  hygiene), not closing a live hole — which is why deferring it is safe.
+- **Backup strategy (recommended): two-phase.** *Now (Free, zero cost):* a **daily GitHub Action**
+  running `pg_dump`/`supabase db dump` against `DIRECT_URL` → an **encrypted off-site store**, + a
+  documented one-off manual procedure. *At/Before real-user launch:* **upgrade to Supabase Pro** (~$25/mo)
+  for managed daily backups, and add **PITR** if/when data value justifies the ~$100/mo. The runbook
+  presents both; owner picks the off-site destination + when to upgrade.
+- **RPO/RTO (recommended targets).** *Pre-launch / now:* **RPO ≤ 24 h** (daily dump), **RTO ≤ 4 h**
+  (manual restore into a fresh project). *At launch (Pro):* **RPO ≤ 24 h** (daily) or **≤ ~2 min**
+  (PITR add-on) for Tier-1 data; **RTO ≤ 1–2 h**. Tier-2/3 data carries no recovery objective (self-heals
+  / regenerable).
+- **Launch-blocker classification (recommended).**
+  - **LAUNCH BLOCKER (must exist before real-user launch):** a working **backup** + a **tested restore**
+    (H8). Without it, any data-loss event is terminal.
+  - **STRONGLY RECOMMENDED pre-launch (not a hard blocker):** the release/rollback procedure (M12) and
+    the deploy-migration runbook (H7) — the app already deploys & rolls back via Vercel; these reduce
+    incident blast radius.
+  - **NICE TO HAVE at launch:** incident-triage checklist + DR scenario depth (valuable, but can mature
+    post-launch).
+- **Owner inputs the runbooks will leave as named placeholders** (not drafting blockers): the off-site
+  backup destination + encryption key custody; on-call contact/escalation; the Supabase project ref;
+  the production domain (overlaps WP5/WP6).
 
-**Q2 — CSP enforcement posture → RESOLVED: Report-Only first.** Ship
-`Content-Security-Policy-Report-Only` via `next.config.ts` `headers()`, gated to production. The
-**enforce** flip + any nonce `middleware.ts` are deferred to a later cycle once reports are observed.
-
-**Q3 — CSP report sink → RESOLVED: yes.** Add a first-party `app/api/csp-report/route.ts` (mirrors
-`/api/events`) to capture violations from real users.
-
-**OPEN QUESTION 4 — HSTS `preload` (still open, owner-facing).** Assumption: include
-`includeSubDomains; preload`. If the production domain / subdomain strategy is unsettled, ship without
-`preload` first. Overlaps the WP5/WP6 domain prerequisites; can be confirmed at PLAN time.
-
-**Standing assumptions:** production is HTTPS (Vercel) so HSTS is meaningful; the production domain is
-single-host; no third-party embeds/scripts will be added within this cycle.
+**Genuinely open (will be surfaced, not silently assumed):** whether the owner wants WP7 to *also*
+deliver the GitHub Action backup workflow and the `migrate deploy` build-command fix **as files** — both
+are **non-doc config/code** and therefore **out of this docs-only WP**; the runbooks include them as
+ready-to-apply templates and flag them as the recommended immediate follow-up (owner to apply, or a
+separate small WP with explicit approval).
 
 ---
 
 ## 6. Out of Scope
 
-- **Flipping CSP to enforce** and the **per-request nonce `middleware.ts`** it requires — deferred to a
-  follow-up cycle after Report-Only telemetry.
-- **WP3 (Sentry/observability), WP5 (env fail-fast), WP7 (runbooks/backups), WP8 (`next` 16).**
-- **Any auth/session change** (`auth.ts`, `app/api/auth/`) — restricted; the CSP is tuned *around* the
-  existing OAuth redirect flow, not modifying it.
-- **`next.config.ts` `images.remotePatterns`** changes (e.g., adding `lh3.googleusercontent.com`) —
-  only needed if Google avatars are introduced, which they are not.
-- **New dependencies / migrations.**
-- **M4 (TMDB split) — OUT OF SCOPE** (per the Q1 resolution above; deferred to its own follow-up cycle).
+- **Any application source-code change.** Docs only (owner constraint). No `package.json` build-command
+  edit, no `app/`/`lib/` change.
+- **Creating/enabling CI or infra files** — `.github/workflows/db-backup.yml`, Vercel build-command
+  changes, secret creation, plan upgrades, and **running an actual backup/restore/migration** are
+  **owner actions**, documented as templates/procedures but not executed here. (Stop-and-ask gates.)
+- **The RLS-disabled advisory** surfaced by the Supabase MCP (15 tables). It is the **known latent**
+  finding (no anon-key path; all DB access is server-side Prisma via direct credentials) tracked in
+  [[project-supabase-security-posture]] — **not** a WP7 (recovery) concern; flagged, not addressed.
+- **WP3 (Sentry/observability), WP5 (env fail-fast), WP8 (`next` 16), M4 (TMDB split), WP2 enforce-CSP**
+  — separate cycles.
+- **Fixing H7 in code** (adding `migrate deploy` to the build) — documented as a recommendation; the
+  *fix* is a future code WP.
 
 ---
 
 ## 7. Readiness Verdict: READY FOR PLANNING
 
-The HTTP-layer surface is fully mapped: the app has **zero** security headers/CSP today; its real
-resource graph is **TMDB images + self-hosted fonts + first-party `/api/events` analytics + a
-redirect-based Google OAuth flow + one static inline theme script**, with **no third-party hosts**. The
-technical approach is settled and low-risk: **enforce static headers immediately + ship CSP
-Report-Only via `next.config.ts`**, with a first-party `/api/csp-report` sink, gated to production.
+The operational surface is fully mapped: **Vercel (push-deploy + one cleanup cron) + Supabase Postgres
+Free (no managed backups/PITR) + Prisma out-of-band migrations (11/11 applied, no drift)**, with a
+small early-stage dataset and clear Tier-1/2/3 data criticality. The recovery gap (H8) is the top risk;
+H7 and M12 are the supporting deploy/rollback gaps. The deliverable is a set of **five cross-linked
+markdown runbooks** under `docs/runbooks/`, grounded in current Supabase/Vercel docs (cited above),
+with recommended backup strategy, RPO/RTO targets, and a launch-blocker classification baked in.
 
-**Confirmed scope for WP2 (this cycle): H4 only** — static security headers (enforced) + a
-**Report-Only** CSP via `next.config.ts`, plus a first-party `app/api/csp-report/route.ts` sink, all
-gated to production. **M4 is deferred.** Anticipated `.workflow_plan_files` manifest (for PLAN):
-`next.config.ts` (headers + Report-Only CSP) and `app/api/csp-report/route.ts` (new), plus a test
-(`__tests__/...`) asserting the headers/CSP are present.
-
-**The cycle remains paused at the PLAN approval checkpoint.** The scope decision is made, but per the
-instruction no PLAN/IMPLEMENT work proceeds until the owner gives the go-ahead to enter PLAN
-(`/plan` / `bash scripts/advance_state.sh next`). No application code has been written.
+**This is a docs-only cycle**; no application code will be modified in PLAN/IMPLEMENT/TEST. The only
+non-doc items (GH Action backup workflow, `migrate deploy` build fix, plan upgrade, restore drill) are
+explicitly owner actions and remain out of scope. **Ready to proceed to PLAN.**
