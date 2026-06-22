@@ -2,6 +2,8 @@
 import { requireUserId } from '@/components/ProfileGuard'
 import { prisma } from '@/lib/prisma'
 import SettingsClient from '@/components/SettingsClient'
+import AnalyticsOptOut from '@/components/AnalyticsOptOut'
+import DeleteAccountSection from '@/components/DeleteAccountSection'
 import ProfileHeader from '@/components/ProfileHeader'
 import { redirect } from 'next/navigation'
 
@@ -20,6 +22,9 @@ export default async function SettingsPage() {
       <div className="w-full max-w-md mx-auto space-y-6">
         <ProfileHeader title="Settings" backHref="/profile" backLabel="← Profile" />
         <SettingsClient email={user.email} initialName={user.displayName} />
+        <hr className="border-line" />
+        <AnalyticsOptOut />
+        <DeleteAccountSection />
       </div>
     </main>
   )

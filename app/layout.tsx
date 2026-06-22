@@ -5,6 +5,7 @@ import SessionProviderWrapper from '@/components/SessionProviderWrapper'
 import ThemeProvider from '@/components/ThemeProvider'
 import ThemeToggle from '@/components/ThemeToggle'
 import AnalyticsTracker from '@/components/AnalyticsTracker'
+import { BRAND_NAME } from '@/lib/brand'
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' })
 const playfair = Playfair_Display({
@@ -14,7 +15,10 @@ const playfair = Playfair_Display({
 })
 
 export const metadata: Metadata = {
-  title: 'PikFlix',
+  // metadataBase resolves relative OG/canonical URLs. Driven by NEXT_PUBLIC_SITE_URL in prod
+  // (a launch prerequisite — set it to [PROD_DOMAIN] in Vercel); falls back to localhost for dev.
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'),
+  title: BRAND_NAME,
   description: 'Less time piking, more time flixing.',
 }
 

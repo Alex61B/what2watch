@@ -38,6 +38,11 @@ export const RATE_LIMITS = {
   roomGet: { limit: 60, windowMs: 60_000 },
   // M2: user-search throttle — keyed per authenticated user (mirrors friendRequest), fail-open.
   userSearch: { limit: 30, windowMs: 60_000 },
+  // WP6/M9: self-serve account deletion (DELETE /api/account) — keyed per authenticated user.
+  // Deliberately fail-OPEN (not failClosed): erasure is a legal right and the op is auth-gated +
+  // idempotent, so a limiter-store outage must never block a legitimate deletion. The modest cap
+  // only curbs accidental rapid re-submits. See docs/plan-wp6-privacy-legal.md §2.
+  accountDelete: { limit: 5, windowMs: 60 * 60_000 },
 } as const
 
 /** Best-effort client IP from Vercel's edge-set x-forwarded-for (leftmost hop). */
