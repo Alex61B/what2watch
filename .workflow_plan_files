@@ -8,3 +8,7 @@ __tests__/lib/friends.test.ts
 __tests__/lib/rate-limit-db.test.ts
 __tests__/api/room-get-visibility.test.ts
 __tests__/api/user-search.test.ts
+__tests__/api/member-cap.test.ts
+__tests__/api/auth-login-throttle.test.ts
+lib/prisma.ts
+__tests__/lib/prisma.test.ts
