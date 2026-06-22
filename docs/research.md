@@ -1,218 +1,223 @@
-# RESEARCH — WP6: Privacy & Data Lifecycle (PikFlix / What2Watch)
+# RESEARCH — WP7: Operational Recovery & Runbooks (PikFlix / What2Watch)
 
-> **State:** RESEARCH (read-only). No application code touched. This document supersedes the
-> prior WP1b research content; WP1b's durable record is `docs/plan-wp1b-enumeration-hardening.md`
-> + `docs/session-handoff-2026-06-21-wp1b.md`.
-> **Audit findings closed by this WP:** **C1** (no privacy/terms pages → launch blocker +
-> Google OAuth suspension risk) and **M9** (PII grows unbounded; no account-deletion / erasure
-> path; `Event.userId` not scrubbed).
+> **State:** RESEARCH (read-only). **Docs-only WP** — no application source code is touched in any
+> state of this cycle (owner constraint 2026-06-22). Supersedes the prior WP6 research content; WP6's
+> durable record is `docs/plan-wp6-privacy-legal.md` + `docs/session-handoff-2026-06-22.md`.
+> **Audit findings in scope:** **H8** (no backup/restore/DR runbook; restore untested — the top
+> operational risk), **H7** (prod migrations applied manually / undocumented; no `migrate deploy` in
+> the build), **M12** (no rollback runbook / expand-contract discipline).
+> **Source:** 2026-06-21 production-readiness audit + `session-handoff-2026-06-22.md` §5 ("top
+> operational risk: Supabase Free = no managed backups").
 
 ---
 
 ## 1. Requirements Summary
 
-**What WP6 delivers and why.** PikFlix collects real personal data (email, display name, Google
-OAuth tokens, social graph, taste profile, behavioral analytics) but ships **zero** privacy/legal
-surface and **no way for a user to delete their account**. This is the single calendar-critical
-launch blocker (audit **C1**) and a standing legal + platform-policy exposure.
+**What WP7 delivers and why.** The application has **no operational recovery documentation and no
+backups**. If the Postgres database is lost, corrupted, or a row is deleted by mistake, there is
+currently **no way to recover** — the production data store (Supabase, **Free plan**) has no managed
+daily backups and no point-in-time recovery, and no manual export process exists. This is the single
+largest remaining production risk after the WP1/WP6 security & privacy work.
 
-Three deliverables, each independently launch-gating:
+WP7 is a **documentation-only** work package that produces the operational runbooks the project needs
+before a real-user launch. Deliverables (one markdown file each, under `docs/runbooks/`):
 
-1. **Publish a Privacy Policy (`/privacy`) and Terms of Service (`/terms`).**
-   - *Legal basis:* GDPR Art. 13/14 (transparency) and CCPA/CPRA notice-at-collection both require
-     a published privacy notice before collecting personal data.
-   - *Platform basis (verified):* Google's OAuth consent screen requires the privacy policy to be
-     **linked on the consent screen and hosted on the same domain as the homepage**; the policy must
-     disclose how the app accesses/uses/stores/shares Google user data. Publishing to production
-     triggers **brand + domain verification (~2–3 business days)**.
+1. **Backup/restore runbook** — how to take and verify logical backups, and how to restore. Includes
+   the **Supabase Free-plan backup-gap mitigation** (scheduled `supabase db dump` / `pg_dump` to
+   off-site encrypted storage; GitHub Actions automation template) and the upgrade path (Supabase Pro
+   managed daily backups + optional PITR).
+2. **Disaster-recovery (DR) runbook** — scenario playbooks: total DB loss, accidental data deletion,
+   Supabase outage, Vercel outage, leaked secret/credential rotation, with step-by-step recovery and
+   RPO/RTO targets per scenario.
+3. **Operations runbook (index)** — system overview (Vercel + Supabase + cron), environments,
+   ownership/on-call basics, the **RPO/RTO recommendations**, the **launch-blocker classification**,
+   and links to the other runbooks.
+4. **Release / rollback procedure** — the deploy flow, **how migrations are actually applied** (Prisma
+   `migrate deploy` via `DIRECT_URL` — H7), **expand/contract discipline**, Vercel **Instant Rollback**,
+   and the DB-rollback caveats (M12).
+5. **Incident triage checklist** — severity levels, the first-15-minutes checklist, where to look
+   (Vercel runtime logs, Supabase logs, `/api/health`), escalation and comms.
 
-2. **Account-deletion / right-to-erasure flow (audit M9).**
-   - *Legal basis:* GDPR Art. 17 (erasure), CCPA right to delete.
-   - *Platform basis (verified):* Google's API Services User Data Policy requires any app that lets
-     users create an account to provide an **in-app deletion option AND a web-accessible deletion
-     request path**, and to delete the associated user data (retention permitted only for disclosed
-     security/fraud/legal reasons).
-   - *Technical:* a deletion must cascade `User` → `Account`/`Member`/`Friendship`/
-     `UserMoviePreference` (FKs already cascade) **and explicitly scrub `Event.userId`** (nullable,
-     **no FK** — orphaned analytics rows otherwise retain the user link for up to 90 days).
-
-3. **Register the consent-screen URLs in Google Cloud Console** (homepage + `/privacy` + `/terms` on
-   the production domain) and publish the app. **Owner action** (Console, not code) — but it depends
-   on the pages from (1) being live on the real domain.
-
-**Supporting UI:** footer/auth-form links to `/privacy` + `/terms` (currently `BrandFooter.tsx` is a
-bare copyright line); a brief at-collection consent line on the signup form; disclosure of the
-first-party analytics in the policy.
+**Why now / why these:** WP7 is owner-operated infrastructure documentation — it closes the recovery
+gap without any code change, and it is the one remaining work package the handoff flags as the *top*
+operational risk. The runbooks also make every later change safer (a tested restore + a rollback
+procedure de-risk WP3/WP5/WP8).
 
 ---
 
-## 2. Stack Choices (reuse existing patterns)
+## 2. Stack Choices (mechanisms to leverage, with current vendor docs)
 
-- **Pages:** App Router **server components**, modeled on `app/profile/page.tsx` (`<main>` +
-  centered container + Tailwind semantic tokens `bg-canvas`/`text-ink`). `/privacy` and `/terms` are
-  static content pages — no client JS, no data fetching. No new deps.
-- **Styling:** Tailwind with the existing semantic tokens (`tailwind.config.ts`) + `serif`
-  (Playfair) for headings, matching the editorial look. No CSS modules.
-- **Footer links:** extend `components/BrandFooter.tsx` (or add a small `LegalLinks` partial) — it is
-  already rendered on the landing page (`app/page.tsx:289`).
-- **Deletion endpoint:** new `DELETE /api/account` (or `/api/user`) server route, auth-gated via the
-  existing `requireUserId()` / `ProfileGuard` pattern (server-side session check used across
-  `app/profile/*`). Wrap the multi-table delete + `Event.userId` scrub in a single Prisma
-  `$transaction` (same pattern WP1a used for the join cap). Apply a durable rate-limit scope from
-  `lib/rate-limit-db.ts` (fail-closed — it is a destructive, authenticated action).
-- **Deletion UI:** a "Delete account" control under `app/profile/settings/*` (client component with a
-  type-to-confirm guard), plus the web-accessible request path Google requires (the same authenticated
-  page satisfies "discoverable in-app"; document an email fallback in the policy for the
-  "without reinstalling" clause).
-- **Event scrub:** `prisma.event.updateMany({ where: { userId }, data: { userId: null } })` inside the
-  deletion transaction — keeps aggregate analytics intact while severing the identity link.
-- **Analytics opt-out (per decision 7):** add a persisted opt-out flag (localStorage, mirrors
-  `pikflix_anon`) + an early-return guard in `lib/analytics.ts#track()`/`flush()`, surfaced as a toggle
-  in `app/profile/settings/*`. No new dep; small, additive.
-- **Migrations:** **none expected.** `Event.userId` is already nullable; no schema change needed for
-  deletion. (If we later decide to also null `memberId`/`anonId` on events, still no schema change.)
-
----
-
-## 3. Environment Verification (confirmed against live code)
-
-- **Google scopes are non-sensitive only** — `auth.ts:31-34` configures the Google provider with no
-  custom `scope`, so NextAuth's defaults (`openid email profile`) apply. ⇒ **no sensitive/restricted
-  security assessment required**; only brand + domain verification.
-- **IP is NOT persisted.** `app/api/events/route.ts` reads `x-forwarded-for` only to build the
-  rate-limit key; the `Event` row has no `ip` column and none is written. **No User-Agent logging.**
-  This materially shrinks the privacy policy's "what we collect" surface.
-- **Analytics is first-party, pseudonymous, bounded.** `anonId` is a client UUID in
-  `localStorage:pikflix_anon`; events are 90-day pruned by the cleanup cron
-  (`app/api/cron/cleanup/route.ts`, `EVENT_RETENTION_MS`). Allowed event types/props are allow-listed
-  (`lib/analytics-events.ts`) and carry no free-form PII.
-- **Cascade FKs already exist** for `Account`, `Member`, `Friendship`, `UserMoviePreference`,
-  `Vote`/`WatchedMovie` (via `Member`) → `User` deletion cleans them automatically. **Only
-  `Event.userId` is an unguarded orphan link.**
-- **Cookies are strictly functional:** `w2w_session_<CODE>` (httpOnly, sameSite=lax, secure in prod,
-  7-day) + the NextAuth JWT session cookie. `w2w_theme` + `pikflix_anon` are functional localStorage.
-  **No third-party/marketing/cross-site cookies.**
-- **Third-party data recipients:** Supabase/Postgres (all data), Google (OAuth handshake → returns
-  profile), Vercel (hosting/cron), TMDB (**no user data sent** — server-side API key + movie queries
-  only), streaming-service deep links (movie title only, no user identity).
-- **Domain is unknown in-repo:** `AUTH_URL=http://localhost:3000`; no `metadataBase`; production domain
-  not committed (Vercel auto-domain or an undocumented custom domain). **This blocks the Google
-  consent-screen registration and the `metadataBase`/canonical URL.** (Owner input.)
-- **Branding:** product name **"PikFlix"** (package `what2watch`); **no legal entity, contact email,
-  jurisdiction, or data-controller identity exists anywhere** in the repo.
+- **Logical backups — Supabase CLI `supabase db dump` (preferred) or `pg_dump`.** `supabase db dump`
+  runs `pg_dump` in a container, excludes Supabase-managed schemas (`auth`/`storage`/extensions),
+  strips reserved roles, and adds idempotent `IF NOT EXISTS` clauses; `--data-only` / `--role-only`
+  control contents; needs `supabase link` (or `--db-url`) and Docker. Raw `pg_dump` against
+  `DIRECT_URL` also works and needs no Docker (simplest for a GitHub Action). For **Free-tier
+  projects, Supabase explicitly recommends regular `db dump` exports kept off-site.** Sources:
+  [Backup & Restore via CLI](https://supabase.com/docs/guides/platform/migrating-within-supabase/backup-restore),
+  [`supabase db dump`](https://supabase.com/docs/reference/cli/supabase-db-dump),
+  [Database Backups](https://supabase.com/docs/guides/platform/backups).
+- **Backup automation — GitHub Actions.** Supabase documents a CI backup workflow; this is the right
+  home for automation here (a scheduled GH Action running `pg_dump`/`supabase db dump` → encrypted
+  off-site store) because **Vercel cron cannot run `pg_dump`** (serverless runtime, no Postgres client
+  binary, execution-time limits). Source:
+  [Automated backups using GitHub Actions](https://supabase.com/docs/guides/deployment/ci/backups).
+  *(WP7 documents and templates this workflow; actually committing `.github/workflows/*` + setting the
+  DB secret is an owner action, out of this docs-only WP — see §5/§6.)*
+- **Managed backups / PITR (upgrade path) — Supabase Pro.** Daily backups are included on Pro/Team/
+  Enterprise; **PITR is a paid add-on (~$100/mo per 7-day retention, up to 28 days)**; Free has
+  neither. Sources:
+  [Database Backups](https://supabase.com/docs/guides/platform/backups),
+  [PITR usage](https://supabase.com/docs/guides/platform/manage-your-usage/point-in-time-recovery),
+  [Pricing](https://supabase.com/pricing).
+- **Restore** — `psql`/`supabase db` restore of a dump into a **scratch project first** (never prod),
+  per the CLI backup-restore guide above + [Restoring a downloaded backup](https://supabase.com/docs/guides/local-development/restoring-downloaded-backup).
+- **Release rollback — Vercel Instant Rollback.** Revert prod to a previous deployment via the
+  dashboard (⋮ → Instant Rollback) or `vercel rollback <url|id>`; **Hobby plan can roll back to the
+  *previous* deployment only** (Pro/Enterprise: any eligible one). After a rollback Vercel disables
+  prod-domain auto-assignment until you `vercel promote`. Sources:
+  [Instant Rollback](https://vercel.com/docs/instant-rollback),
+  [Rolling back production](https://vercel.com/docs/deployments/rollback-production-deployment),
+  [`vercel rollback`](https://vercel.com/docs/cli/rollback),
+  [Promoting deployments](https://vercel.com/docs/deployments/promoting-a-deployment).
+- **DB migrations — Prisma, not Supabase CLI.** Confirmed live: the schema is tracked in
+  `_prisma_migrations` (Supabase's own `list_migrations` is empty). Apply with
+  `./node_modules/.bin/prisma migrate deploy` against `DIRECT_URL` (never bare `npx prisma` → pulls v7,
+  breaks this v6 project, see [[reference-prisma-migrate-local-cli]]). Code rollback is easy (Vercel);
+  **DB rollback is the hard part** — Prisma has no auto down-migrations, so the runbook prescribes
+  **expand/contract** (additive-then-cleanup) so a code rollback never needs a schema rollback.
+- **Doc format/structure:** plain markdown under a new `docs/runbooks/` folder, cross-linked from a
+  `README.md` index. No new dependency, no tooling.
 
 ---
 
-## 4. Risks & Edge Cases
+## 3. Environment Verification (confirmed against the live system)
 
-**Schedule / external:**
-- **Google verification latency (~2–3 business days)** + domain verification of the homepage, privacy,
-  and ToS URLs. The pages must be **live on the production domain** before this can start ⇒ deploy
-  ordering matters; build slack into the launch calendar.
-- If the production domain isn't finalized, the consent-screen registration cannot complete.
-
-**Account-deletion correctness (the high-risk surface):**
-- **JWT session strategy (`auth.ts:26`) means there is no server-side session to invalidate.** A
-  deleted user's already-issued JWT stays cryptographically valid until expiry. Mitigation to weigh:
-  short session lifetime, or a deleted-user check in the auth `session` callback (lookup user;
-  invalidate if gone — note this adds a DB read per request).
-- **`Event.userId` orphan scrub** must be inside the same transaction as the user delete, or a crash
-  mid-delete leaves dangling identity links. No FK enforces this — easy to forget.
-- **Host of an active room:** `Room` has no `userId` FK; deleting a user removes their `Member` row
-  but the room persists (auto-expires later). Acceptable, but the deletion path must not throw on
-  in-flight rooms/votes. Confirm cascade through `Member` → `Vote`/`WatchedMovie` doesn't deadlock
-  with the room cleanup cron.
-- **OAuth token disposal:** deleting the `Account` row removes our stored Google `refresh_token`/
-  `access_token`, but does **not** revoke Google's grant. Optional best practice: call Google's token
-  revocation endpoint on delete. Decide in/out of scope.
-- **Authorization:** the delete must derive the target strictly from the authenticated session
-  (`requireUserId()`), never from a client-supplied id — else it becomes an account-deletion IDOR.
-  Add a type-to-confirm step + rate-limit (fail-closed) to prevent accidental/abusive deletion.
-- **Idempotency / partial failure:** re-deleting or deleting a half-deleted account should be safe.
-
-**Privacy-policy truthfulness:**
-- The policy's retention claims must match reality (rooms: ~24h grace cron; events: 90d; account data:
-  until deletion). Any promise we can't keep is itself a violation.
-- **Residual email exposure** (carried from WP1b): `listFriends`/`GET /api/friends` still returns
-  `email` for established friends. Not enumeration, but the policy must accurately describe what
-  friends can see, or we close it here. (Decision — likely just disclose.)
-
-**Cookie/analytics consent (legal ambiguity):**
-- Strictly-necessary cookies need no consent. The **first-party, no-IP, pseudonymous analytics** is a
-  gray area under EU ePrivacy: defensible as legitimate-interest with disclosure + opt-out, but a
-  strict reading wants prior consent. Choosing "disclose + honor opt-out, no banner" is the
-  pragmatic default; a banner is the conservative option. **Owner risk decision.**
+- **Hosting = Vercel; one cron.** `vercel.json` defines a single cron `GET /api/cron/cleanup` at
+  `0 4 * * *` (04:00 UTC daily). Deploys are git-push driven (no `vercel.json` build override).
+- **Build does NOT run migrations.** `package.json` build = `prisma generate && next build` — **no
+  `prisma migrate deploy`** ⇒ migrations are applied **out-of-band, manually** (confirms **H7**).
+- **DB = Supabase Postgres, dual-URL.** `schema.prisma` datasource: `url = DATABASE_URL` (pooled,
+  runtime; capped to 1 conn/instance per `lib/prisma.ts`), `directUrl = DIRECT_URL` (direct;
+  migrations). `prisma.config.ts` builds the migration adapter from `DIRECT_URL ?? DATABASE_URL` and
+  loads `.env.local` then `.env`. (Pooled vs direct matters for restore — see §4.)
+- **Live DB state (read-only MCP check, 2026-06-22):**
+  - **11/11 Prisma migrations applied, none rolled back — no drift** (`init` 2026-05-26 … `add_ratelimit`
+    2026-06-20). Production schema matches the repo.
+  - 15 public tables. Approx row counts: `User` 6, `Account` 2, `Friendship` 5, `UserMoviePreference`
+    33, `MovieCache` 26, `Event` 239, `Room`/`Member` ~1, `RateLimit` 5 (counts are `reltuples`
+    estimates). **Small, early-stage dataset** → fast dumps/restores; favors cheap logical backups now.
+- **Backup posture = NONE (the gap).** Supabase **Free** plan ⇒ no managed daily backups, no PITR
+  (verified vs current docs, §2). No manual export process exists. **Effective RPO = ∞ / RTO = ∞ for a
+  destructive event today.**
+- **Rollback posture:** Vercel Instant Rollback is available (code). No DB rollback story exists.
+- **Recovery aids that already exist:** `prisma/migrations` (schema rebuild), `prisma/seed.ts` (seed
+  data), `GET /api/health` (liveness), `/admin` overview, first-party event log. **MovieCache and
+  Event are regenerable/expendable** (TMDB re-fetch; 90-day pruned analytics).
+- **Data criticality tiers (drives RPO/RTO):**
+  - **Tier 1 — irreplaceable:** `User`, `Account` (OAuth links + `passwordHash`), `Friendship`,
+    `UserMoviePreference`, `WatchedMovie`, `User.savedServices/savedFilters`. Loss = real user harm.
+  - **Tier 2 — transient:** `Room`, `Member`, `Vote`, `RoomQueue`, `MemberQueue` (rooms auto-expire
+    ≤48h; in-flight loss is annoying, self-heals).
+  - **Tier 3 — regenerable/ephemeral:** `MovieCache` (TMDB), `Event` (90-day analytics), `RateLimit`,
+    `VerificationToken`.
 
 ---
 
-## 5. Assumptions & Open Questions (gate PLAN — owner/decision inputs)
+## 4. Risks & Edge Cases (these shape the runbook content)
 
-**Owner-supplied facts — RESOLVED / PLACEHOLDER (2026-06-21):**
-1. **Data-controller / legal identity → "Alexander Smith"** (individual). Named in privacy policy + ToS.
-2. **Contact email → PLACEHOLDER** (`[PRIVACY_CONTACT_EMAIL]`). Still unknown; insert as a placeholder
-   token throughout the pages/policy so a single find-replace fills it at launch.
-3. **Governing-law jurisdiction → State of Florida, USA.** ToS governing-law + venue clause.
-4. **Production domain → PLACEHOLDER** (`[PROD_DOMAIN]`). Still unknown. **Launch prerequisite, not a
-   drafting blocker** — pages/deletion flow/plan are written domain-agnostic with the placeholder; the
-   domain-dependent steps (Google consent-screen verification, `AUTH_URL`, `metadataBase`, published
-   policy URLs) are called out as a **pre-launch checklist**, not IMPLEMENT-cycle code.
-   - **Product name: "PikFlix"** is a **working name and may change before launch** — treat the brand
-     string as a single source-of-truth constant where practical so a rename is cheap.
-
-**Design decisions — RESOLVED with the user 2026-06-21:**
-5. **v1 auth surface → BOTH (Google + email/password).** ⇒ the Google consent-screen registration +
-   brand/domain verification **IS a hard v1 launch blocker**; deploy ordering must put `/privacy` +
-   `/terms` live on the production domain **before** verification can start.
-6. **Deletion UX → self-serve in-app button (auth-gated, type-to-confirm) + documented email
-   fallback.** Satisfies Google's "in-app option AND web-accessible request" requirement.
-7. **Cookie/analytics consent → disclose + honor opt-out, no banner.** Treat first-party no-IP
-   analytics as legitimate interest; IMPLEMENT adds a localStorage opt-out flag + `track()`/`flush()`
-   guard + a settings toggle (see §2).
-8. **Regulatory coverage → one policy covering GDPR + CCPA/CPRA generically.**
-
-**Still on recommended defaults (proceed unless corrected at plan-approval):**
-9. **Minimum age** — state a **13+** minimum (COPPA floor; 16 if targeting EU minors conservatively).
-10. **Google token revocation on delete** — local token deletion only for v1 (deleting the `Account`
-    row); calling Google's revocation endpoint is a noted follow-up.
-
-**Owner-supplied facts (items 1–4 above) remain the only hard blocker to PLAN.**
-
-**Assumptions (will proceed on these unless corrected):**
-- Self-serve **data export/portability** is **not** built as code in WP6 — the policy commits to a
-  manual email-based fulfillment of access/portability requests (revisit later).
-- No schema/migration change is needed (deletion uses existing nullable `Event.userId` + cascade FKs).
-- The deleted-user JWT-invalidation hardening is in scope to *evaluate*; whether to add the per-request
-  DB check is a PLAN decision (perf trade-off).
+- **Unrecoverable data loss (the core risk).** With no backups, accidental `DELETE`/`DROP`, a bad
+  migration, or a Supabase project deletion is **permanent**. The backup runbook + a *tested* restore
+  is the mitigation; until a backup exists, this stays the top risk.
+- **A backup you've never restored isn't a backup.** The DR runbook must mandate a **restore test into
+  a scratch project** (never prod) with a recorded "last tested" date; untested restores routinely fail
+  on roles/extensions/ownership.
+- **Dump connection target.** Take dumps against the **direct** connection (`DIRECT_URL` / port 5432),
+  not the transaction-mode pooler (6543) — pooled connections break `pg_dump`. Document explicitly.
+- **`supabase db dump` excludes managed schemas by design** — restoring into a *new* Supabase project
+  re-creates `auth`/`storage` separately; document that a full DR restore may need the managed-schema
+  handling from the Supabase restore guide, not just the public-schema dump.
+- **Secrets needed for backup/restore.** Dumps require `DIRECT_URL` (a DB credential). The runbook must
+  say: store it as a CI/secret manager entry, never in the repo; treat dump artifacts as **sensitive
+  PII** (emails, `passwordHash`) → encrypt at rest + access-controlled off-site store + retention/erase
+  policy (consistent with the WP6 privacy posture).
+- **Migration/rollback hazards (M12).** A destructive (contract) migration deployed *before* the code
+  that stops using the old column makes a Vercel code-rollback insufficient (the column is already
+  gone). Expand/contract ordering in the release runbook prevents this. Note Prisma has no built-in
+  down-migration.
+- **Vercel Hobby rollback limit.** Only the *immediately previous* deployment is one-click reversible
+  on Hobby; the runbook should note keeping known-good deployment IDs and the `vercel promote` undo.
+- **Free-tier project pausing.** Supabase pauses inactive Free projects — a relevant availability note
+  for the ops runbook (and another reason to schedule regular dumps / consider Pro).
+- **Out-of-band migrations drift risk (H7).** Because the build doesn't run `migrate deploy`, a deploy
+  whose code expects a not-yet-applied migration will 500. The release runbook must order
+  "apply migration → then deploy code" (expand) and document the drift check
+  (`prisma migrate status` against `DIRECT_URL`).
+- **Docs-only verification limit.** A pure-docs WP has no meaningful automated test; `scripts/verify.sh`
+  will pass unchanged. The real "test" of these runbooks is the owner executing a **restore drill** —
+  called out as an explicit owner acceptance step, not an automated check.
 
 ---
 
-## 6. Out of Scope (explicitly excluded from this cycle)
+## 5. Assumptions & Open Questions
 
-- **Actual Google Cloud Console configuration** (consent screen + domain verification) — owner action,
-  not committable code; WP6 produces the pages/URLs it consumes.
-- **Self-serve data-export/portability API** — deferred; satisfied via documented manual process.
-- **A full cookie-consent banner** — excluded unless decision (7) selects the banner option.
-- **Closing the WP1b residual** `GET /api/friends` email exposure as a *code* change — default is to
-  disclose it in the policy, not re-engineer it here (revisit if the owner prefers removal).
-- **WP2** (security headers/CSP), **WP3** (Sentry), **WP5** (env fail-fast incl. `AUTH_URL`/secret
-  assertion), **WP7** (deploy + backup/restore runbooks — incl. the still-open Supabase Free-plan
-  backup gap), **WP8** (next 16). Cross-WP note: WP5's `AUTH_URL`/prod-env work and WP6's domain need
-  are coupled — sequence them together when the domain is known.
+**Recommendations are baked into the docs (the task asked for recommendations, not gated questions).**
+The following are documented as **owner decisions with a recommended default**, not blockers:
+
+- **Backup strategy (recommended): two-phase.** *Now (Free, zero cost):* a **daily GitHub Action**
+  running `pg_dump`/`supabase db dump` against `DIRECT_URL` → an **encrypted off-site store**, + a
+  documented one-off manual procedure. *At/Before real-user launch:* **upgrade to Supabase Pro** (~$25/mo)
+  for managed daily backups, and add **PITR** if/when data value justifies the ~$100/mo. The runbook
+  presents both; owner picks the off-site destination + when to upgrade.
+- **RPO/RTO (recommended targets).** *Pre-launch / now:* **RPO ≤ 24 h** (daily dump), **RTO ≤ 4 h**
+  (manual restore into a fresh project). *At launch (Pro):* **RPO ≤ 24 h** (daily) or **≤ ~2 min**
+  (PITR add-on) for Tier-1 data; **RTO ≤ 1–2 h**. Tier-2/3 data carries no recovery objective (self-heals
+  / regenerable).
+- **Launch-blocker classification (recommended).**
+  - **LAUNCH BLOCKER (must exist before real-user launch):** a working **backup** + a **tested restore**
+    (H8). Without it, any data-loss event is terminal.
+  - **STRONGLY RECOMMENDED pre-launch (not a hard blocker):** the release/rollback procedure (M12) and
+    the deploy-migration runbook (H7) — the app already deploys & rolls back via Vercel; these reduce
+    incident blast radius.
+  - **NICE TO HAVE at launch:** incident-triage checklist + DR scenario depth (valuable, but can mature
+    post-launch).
+- **Owner inputs the runbooks will leave as named placeholders** (not drafting blockers): the off-site
+  backup destination + encryption key custody; on-call contact/escalation; the Supabase project ref;
+  the production domain (overlaps WP5/WP6).
+
+**Genuinely open (will be surfaced, not silently assumed):** whether the owner wants WP7 to *also*
+deliver the GitHub Action backup workflow and the `migrate deploy` build-command fix **as files** — both
+are **non-doc config/code** and therefore **out of this docs-only WP**; the runbooks include them as
+ready-to-apply templates and flag them as the recommended immediate follow-up (owner to apply, or a
+separate small WP with explicit approval).
 
 ---
 
-## 7. Readiness Verdict
+## 6. Out of Scope
 
-**Technical approach: READY FOR PLANNING.** The code-side surface is fully mapped — the pages, the
-footer/consent links, the `DELETE /api/account` transaction (cascade + `Event.userId` scrub), and the
-deletion UI all reuse existing patterns with **no new dependencies and no migration**. All
-launch-blocking privacy requirements are identified (C1 pages + Google consent registration; M9
-deletion + event scrub; verified against Google's current OAuth + User-Data policies).
+- **Any application source-code change.** Docs only (owner constraint). No `package.json` build-command
+  edit, no `app/`/`lib/` change.
+- **Creating/enabling CI or infra files** — `.github/workflows/db-backup.yml`, Vercel build-command
+  changes, secret creation, plan upgrades, and **running an actual backup/restore/migration** are
+  **owner actions**, documented as templates/procedures but not executed here. (Stop-and-ask gates.)
+- **The RLS-disabled advisory** surfaced by the Supabase MCP (15 tables). It is the **known latent**
+  finding (no anon-key path; all DB access is server-side Prisma via direct credentials) tracked in
+  [[project-supabase-security-posture]] — **not** a WP7 (recovery) concern; flagged, not addressed.
+- **WP3 (Sentry/observability), WP5 (env fail-fast), WP8 (`next` 16), M4 (TMDB split), WP2 enforce-CSP**
+  — separate cycles.
+- **Fixing H7 in code** (adding `migrate deploy` to the build) — documented as a recommendation; the
+  *fix* is a future code WP.
 
-**Design decisions 5–8 are RESOLVED** (2026-06-21): launch with both auth methods (Google verification
-is a v1 blocker), self-serve + email-fallback deletion, disclose-+-opt-out analytics, GDPR+CCPA
-coverage. **Owner facts resolved** (controller = Alexander Smith, jurisdiction = Florida) **with two
-launch-time placeholders** — `[PROD_DOMAIN]` and `[PRIVACY_CONTACT_EMAIL]`. Per the user's direction,
-these placeholders do **not** block drafting the pages, the deletion flow, or the plan; the
-domain-dependent items (Google OAuth verification, `AUTH_URL`, `metadataBase`, published policy URLs)
-are documented as **launch prerequisites**. **READY TO ADVANCE TO PLAN.**
+---
+
+## 7. Readiness Verdict: READY FOR PLANNING
+
+The operational surface is fully mapped: **Vercel (push-deploy + one cleanup cron) + Supabase Postgres
+Free (no managed backups/PITR) + Prisma out-of-band migrations (11/11 applied, no drift)**, with a
+small early-stage dataset and clear Tier-1/2/3 data criticality. The recovery gap (H8) is the top risk;
+H7 and M12 are the supporting deploy/rollback gaps. The deliverable is a set of **five cross-linked
+markdown runbooks** under `docs/runbooks/`, grounded in current Supabase/Vercel docs (cited above),
+with recommended backup strategy, RPO/RTO targets, and a launch-blocker classification baked in.
+
+**This is a docs-only cycle**; no application code will be modified in PLAN/IMPLEMENT/TEST. The only
+non-doc items (GH Action backup workflow, `migrate deploy` build fix, plan upgrade, restore drill) are
+explicitly owner actions and remain out of scope. **Ready to proceed to PLAN.**

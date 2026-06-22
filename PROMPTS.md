@@ -2,6 +2,32 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-22 — WP7: Operational recovery & runbooks (docs-only)
+
+**Prompt (summary):** After housekeeping (push WP2 → PR #26; confirm WP4 PR #25 CLEAN; update handoff),
+begin a fresh RESEARCH cycle for **WP7 — backup/restore runbooks & operational recovery**, read-only.
+Then (approved) complete the full RESEARCH→PLAN→IMPLEMENT→TEST cycle, **docs-only**: deliver a
+backup/restore runbook, disaster-recovery runbook, operations runbook, release/rollback procedure,
+incident-triage checklist, Supabase Free-plan backup-gap mitigation, RPO/RTO recommendations, and a
+launch-blocker classification. Web research allowed (cite current Supabase/Vercel docs). Stop-and-ask
+before any code/env/prod/migration/push/PR. At the end: run verification, commit to a dedicated branch,
+update a handoff; do not push without approval.
+
+**Approach:** Branch `feat/wp7-ops-runbooks` off `main`. RESEARCH grounded against the **live** DB via
+Supabase MCP (read-only): **11/11 Prisma migrations applied, no drift**; migrations tracked by Prisma
+(`_prisma_migrations`), not the Supabase CLI; **Supabase Free = no managed backups / no PITR** (the gap);
+Vercel push-deploy + one cleanup cron; build does **not** run `migrate deploy` (H7). Five cross-linked
+markdown runbooks under **`docs/runbooks/`** (README/ops index, backup-restore, disaster-recovery,
+deploy-release-rollback, incident-triage), citing current Supabase/Vercel docs. Recommended two-phase
+backup (daily logical dump now → Supabase Pro before launch → PITR later), RPO/RTO targets, and a
+launch-blocker classification (backup + **tested restore** = blocker). Non-doc items (GH Action backup
+workflow, `migrate deploy` build fix, plan upgrade, restore drill) are templated in-doc and flagged as
+owner actions — **no code/CI/env/prod changed**. Surfaced the known-latent **RLS-disabled** advisory
+(out of WP7 scope). Research/plan in `docs/research.md` + `docs/plan-wp7-ops-runbooks.md`.
+
+**Verification:** `scripts/verify.sh` green (no code touched — typecheck + lint + Jest unchanged);
+docs sanity — all five files present, code fences balanced, internal links resolve, drift-free.
+
 ## 2026-06-21 — WP6: Privacy & data lifecycle (privacy/terms + account deletion)
 
 **Prompt (summary):** Begin **WP6** (the C1 launch blocker) in RESEARCH-only, then proceed to
