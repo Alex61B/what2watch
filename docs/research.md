@@ -1,218 +1,214 @@
-# RESEARCH — WP6: Privacy & Data Lifecycle (PikFlix / What2Watch)
+# RESEARCH — WP2: HTTP Security Headers & CSP Hardening (PikFlix / What2Watch)
 
-> **State:** RESEARCH (read-only). No application code touched. This document supersedes the
-> prior WP1b research content; WP1b's durable record is `docs/plan-wp1b-enumeration-hardening.md`
-> + `docs/session-handoff-2026-06-21-wp1b.md`.
-> **Audit findings closed by this WP:** **C1** (no privacy/terms pages → launch blocker +
-> Google OAuth suspension risk) and **M9** (PII grows unbounded; no account-deletion / erasure
-> path; `Event.userId` not scrubbed).
+> **State:** RESEARCH (read-only). No application code touched. This document **supersedes** the
+> prior WP6 research content; WP6's durable record is `docs/plan-wp6-privacy-legal.md` +
+> `docs/session-handoff-2026-06-22.md`.
+> **Audit findings in scope:** **H4** (no HTTP security headers, no Content-Security-Policy) and —
+> *pending the scope decision in §5* — **M4** (`lib/tmdb.ts` is not `server-only`; a client import
+> pulls the TMDB fetch module into the browser bundle).
+> **Source:** 2026-06-21 production-readiness audit; next code cycle per
+> `session-handoff-2026-06-22.md` §4/§7 ("WP2 is the only remaining pure-code WP with zero external
+> dependency").
 
 ---
 
 ## 1. Requirements Summary
 
-**What WP6 delivers and why.** PikFlix collects real personal data (email, display name, Google
-OAuth tokens, social graph, taste profile, behavioral analytics) but ships **zero** privacy/legal
-surface and **no way for a user to delete their account**. This is the single calendar-critical
-launch blocker (audit **C1**) and a standing legal + platform-policy exposure.
+**What WP2 delivers and why.** The app currently ships **no HTTP security headers and no
+Content-Security-Policy** (verified: `next.config.ts` sets only `images.remotePatterns`; there is no
+`middleware.ts`; a repo-wide search for `Content-Security-Policy`/`X-Frame-Options`/
+`Strict-Transport-Security`/`headers()` returns nothing). Every response is therefore served with
+browser defaults — no clickjacking protection, no MIME-sniff protection, no transport pinning, no
+referrer control, no script/connect allow-listing. This is **audit finding H4** and the last
+HTTP-layer gap after the WP1 abuse/enumeration work and the WP6 privacy work.
 
-Three deliverables, each independently launch-gating:
+Two logically separable deliverables (the H4/M4 split is the central scope question — see §5):
 
-1. **Publish a Privacy Policy (`/privacy`) and Terms of Service (`/terms`).**
-   - *Legal basis:* GDPR Art. 13/14 (transparency) and CCPA/CPRA notice-at-collection both require
-     a published privacy notice before collecting personal data.
-   - *Platform basis (verified):* Google's OAuth consent screen requires the privacy policy to be
-     **linked on the consent screen and hosted on the same domain as the homepage**; the policy must
-     disclose how the app accesses/uses/stores/shares Google user data. Publishing to production
-     triggers **brand + domain verification (~2–3 business days)**.
+1. **H4 — Security response headers + a phased CSP.**
+   - Add the standard static security headers to **all** responses (enforced immediately, no breakage
+     risk): `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options` (and/or CSP
+     `frame-ancestors`), `Referrer-Policy`, `Permissions-Policy`.
+   - Introduce a **Content-Security-Policy in Report-Only mode first** (see "phasing" below), tuned to
+     the app's real resource graph (TMDB images, self-hosted fonts, first-party analytics), observe
+     violations, then flip to enforce in a later cycle.
 
-2. **Account-deletion / right-to-erasure flow (audit M9).**
-   - *Legal basis:* GDPR Art. 17 (erasure), CCPA right to delete.
-   - *Platform basis (verified):* Google's API Services User Data Policy requires any app that lets
-     users create an account to provide an **in-app deletion option AND a web-accessible deletion
-     request path**, and to delete the associated user data (retention permitted only for disclosed
-     security/fraud/legal reasons).
-   - *Technical:* a deletion must cascade `User` → `Account`/`Member`/`Friendship`/
-     `UserMoviePreference` (FKs already cascade) **and explicitly scrub `Event.userId`** (nullable,
-     **no FK** — orphaned analytics rows otherwise retain the user link for up to 90 days).
+2. **M4 — `server-only` TMDB split** *(in scope only if the §5 decision keeps it here).*
+   - Split `lib/tmdb.ts` into a server-only fetch module (add `import 'server-only'`; keep
+     `tmdbFetch`/`discoverMovies`/`getMovieById`/`getWatchProviders`) and a client-safe module
+     (constants/types/pure helpers: `TMDB_GENRES`, `STREAMING_SERVICES`, `DEPTH_BANDS`, `ServiceId`,
+     `buildStreamingUrl`, `parseMovieResult`, `parseWatchProviders`). Repoint the 4 client importers.
 
-3. **Register the consent-screen URLs in Google Cloud Console** (homepage + `/privacy` + `/terms` on
-   the production domain) and publish the app. **Owner action** (Console, not code) — but it depends
-   on the pages from (1) being live on the real domain.
+**Why phase the CSP (immediate vs. report-only — the key H4 question).** A strict enforced CSP would
+**break the app on contact** because:
+- `app/layout.tsx:39` injects a **static inline `<script>`** (the theme-no-flash init) via
+  `dangerouslySetInnerHTML`. A strict `script-src 'self'` blocks inline scripts unless they carry a
+  matching **hash** or per-request **nonce**.
+- Next.js App Router injects its **own inline bootstrap/hydration scripts**; a strict policy needs a
+  per-request **nonce via `middleware.ts`** (which opts routes into dynamic rendering) or a blanket
+  `'unsafe-inline'` (which defeats the point).
+- We have **no production telemetry** on what real browsers actually request.
 
-**Supporting UI:** footer/auth-form links to `/privacy` + `/terms` (currently `BrandFooter.tsx` is a
-bare copyright line); a brief at-collection consent line on the signup form; disclosure of the
-first-party analytics in the policy.
-
----
-
-## 2. Stack Choices (reuse existing patterns)
-
-- **Pages:** App Router **server components**, modeled on `app/profile/page.tsx` (`<main>` +
-  centered container + Tailwind semantic tokens `bg-canvas`/`text-ink`). `/privacy` and `/terms` are
-  static content pages — no client JS, no data fetching. No new deps.
-- **Styling:** Tailwind with the existing semantic tokens (`tailwind.config.ts`) + `serif`
-  (Playfair) for headings, matching the editorial look. No CSS modules.
-- **Footer links:** extend `components/BrandFooter.tsx` (or add a small `LegalLinks` partial) — it is
-  already rendered on the landing page (`app/page.tsx:289`).
-- **Deletion endpoint:** new `DELETE /api/account` (or `/api/user`) server route, auth-gated via the
-  existing `requireUserId()` / `ProfileGuard` pattern (server-side session check used across
-  `app/profile/*`). Wrap the multi-table delete + `Event.userId` scrub in a single Prisma
-  `$transaction` (same pattern WP1a used for the join cap). Apply a durable rate-limit scope from
-  `lib/rate-limit-db.ts` (fail-closed — it is a destructive, authenticated action).
-- **Deletion UI:** a "Delete account" control under `app/profile/settings/*` (client component with a
-  type-to-confirm guard), plus the web-accessible request path Google requires (the same authenticated
-  page satisfies "discoverable in-app"; document an email fallback in the policy for the
-  "without reinstalling" clause).
-- **Event scrub:** `prisma.event.updateMany({ where: { userId }, data: { userId: null } })` inside the
-  deletion transaction — keeps aggregate analytics intact while severing the identity link.
-- **Analytics opt-out (per decision 7):** add a persisted opt-out flag (localStorage, mirrors
-  `pikflix_anon`) + an early-return guard in `lib/analytics.ts#track()`/`flush()`, surfaced as a toggle
-  in `app/profile/settings/*`. No new dep; small, additive.
-- **Migrations:** **none expected.** `Event.userId` is already nullable; no schema change needed for
-  deletion. (If we later decide to also null `memberId`/`anonId` on events, still no schema change.)
+Therefore the safe, reversible path is: **enforce the static headers now + ship CSP as
+`Content-Security-Policy-Report-Only`**, collect violation reports, then enforce in a follow-up.
+Report-Only never blocks a single request, so it is safe to deploy immediately.
 
 ---
 
-## 3. Environment Verification (confirmed against live code)
+## 2. Stack Choices (leverage existing patterns)
 
-- **Google scopes are non-sensitive only** — `auth.ts:31-34` configures the Google provider with no
-  custom `scope`, so NextAuth's defaults (`openid email profile`) apply. ⇒ **no sensitive/restricted
-  security assessment required**; only brand + domain verification.
-- **IP is NOT persisted.** `app/api/events/route.ts` reads `x-forwarded-for` only to build the
-  rate-limit key; the `Event` row has no `ip` column and none is written. **No User-Agent logging.**
-  This materially shrinks the privacy policy's "what we collect" surface.
-- **Analytics is first-party, pseudonymous, bounded.** `anonId` is a client UUID in
-  `localStorage:pikflix_anon`; events are 90-day pruned by the cleanup cron
-  (`app/api/cron/cleanup/route.ts`, `EVENT_RETENTION_MS`). Allowed event types/props are allow-listed
-  (`lib/analytics-events.ts`) and carry no free-form PII.
-- **Cascade FKs already exist** for `Account`, `Member`, `Friendship`, `UserMoviePreference`,
-  `Vote`/`WatchedMovie` (via `Member`) → `User` deletion cleans them automatically. **Only
-  `Event.userId` is an unguarded orphan link.**
-- **Cookies are strictly functional:** `w2w_session_<CODE>` (httpOnly, sameSite=lax, secure in prod,
-  7-day) + the NextAuth JWT session cookie. `w2w_theme` + `pikflix_anon` are functional localStorage.
-  **No third-party/marketing/cross-site cookies.**
-- **Third-party data recipients:** Supabase/Postgres (all data), Google (OAuth handshake → returns
-  profile), Vercel (hosting/cron), TMDB (**no user data sent** — server-side API key + movie queries
-  only), streaming-service deep links (movie title only, no user identity).
-- **Domain is unknown in-repo:** `AUTH_URL=http://localhost:3000`; no `metadataBase`; production domain
-  not committed (Vercel auto-domain or an undocumented custom domain). **This blocks the Google
-  consent-screen registration and the `metadataBase`/canonical URL.** (Owner input.)
-- **Branding:** product name **"PikFlix"** (package `what2watch`); **no legal entity, contact email,
-  jurisdiction, or data-controller identity exists anywhere** in the repo.
+- **Delivery mechanism — `async headers()` in `next.config.ts` (recommended for this cycle).**
+  Static headers and a **static Report-Only CSP** map cleanly onto Next's `headers()` config. This is
+  the smallest change, requires **no `middleware.ts`**, and does **not** opt the app out of static
+  rendering. `next.config.ts` is a tracked *root application file* (per `AGENTS.md`) and is **not** on
+  the "Restricted Areas" list, so it is editable under the normal PLAN→IMPLEMENT gate.
+  - *Deferred to the enforce phase:* a `middleware.ts` that mints a per-request nonce. Nonces are only
+    needed once we flip CSP to **enforce**; they are out of scope for a Report-Only first cycle.
+- **Inline theme script:** it is **static**, so a `sha256-…` hash in `script-src` is the clean,
+  nonce-free way to allow exactly it. (The hash is computed over the exact bytes of `themeInitScript`;
+  computed during IMPLEMENT.)
+- **CSP violation collection:** add a first-party **`app/api/csp-report/route.ts`** that accepts the
+  `application/csp-report` (and `application/reports+json`) POST and logs it — mirroring the existing
+  first-party `/api/events` ingest pattern (`lib/analytics.ts` → `/api/events`). Keeps reports
+  in-house, no third-party collector, no new dependency. (Endpoint is a new file → belongs in the PLAN
+  manifest.)
+- **Apply CSP in production only.** Dev (HMR / React Fast Refresh) requires `'unsafe-eval'` and a
+  `ws:`/`connect-src` websocket; gate the CSP header on `process.env.NODE_ENV === 'production'` so the
+  dev server is unaffected. Static headers (HSTS etc.) can apply in all environments.
+- **No new runtime dependencies.** Everything uses Next's built-in `headers()` + a plain route
+  handler. (Consistent with the audit's "migration-free, dependency-free" WP cadence.)
+
+---
+
+## 3. Environment Verification (the app's real resource graph)
+
+Confirmed by reading the code — the CSP must allow exactly these and nothing more:
+
+| Resource class | Where it comes from | CSP directive implication |
+|---|---|---|
+| **Movie posters / provider logos** | `https://image.tmdb.org/t/p/…` — 3 raw `<img src={m.posterUrl}>` (`MovieListClient`, `SharedSessionClient`, `FriendDetailClient`) + 2 `next/image` (`VotingCard`, `MatchResult`). `next.config.ts` allow-lists `image.tmdb.org`. | `img-src 'self' https://image.tmdb.org data:` (raw `<img>` hit TMDB directly; `next/image` proxies via same-origin `/_next/image`; `data:` covers blur/placeholder URIs) |
+| **Fonts** | `next/font/google` (`Inter`, `Playfair_Display`) — **self-hosted at build**, served from `/_next/static/media/*`. No runtime call to `fonts.googleapis.com`/`fonts.gstatic.com`. | `font-src 'self'` — **no Google Fonts domains needed** |
+| **First-party analytics** | `lib/analytics.ts` → `sendBeacon`/`fetch('/api/events')` (same-origin). No GA/gtag/Vercel Analytics/Plausible/PostHog anywhere. | `connect-src 'self'` |
+| **Google OAuth sign-in** | `auth.ts` (NextAuth 5, Google + Credentials). Sign-in is a **top-level 302 redirect** to `accounts.google.com`; NextAuth POSTs to same-origin `/api/auth/*`. **Not** a fetch, XHR, or iframe. | `form-action 'self'`, `frame-src 'none'` — **no Google domains needed**. (CSP does not govern top-level navigations.) |
+| **Google avatars** | **Not rendered** — repo search for `user.image`/avatar rendering returns nothing. (If avatars are added later, `img-src` + `next.config` `remotePatterns` would need `lh3.googleusercontent.com`.) | none today |
+| **Inline `<script>`** | `app/layout.tsx:39` theme-init via `dangerouslySetInnerHTML` (static). | needs `script-src` **hash** (or nonce in enforce phase) |
+| **Inline styles** | Tailwind compiles to a same-origin stylesheet, but `next/font`/Next may inject inline `<style>`. | likely `style-src 'self' 'unsafe-inline'` (style nonces are impractical; confirm via Report-Only) |
+| **iframes / objects / workers** | None found. | `frame-src 'none'`, `object-src 'none'`, `base-uri 'self'` |
+| **Third-party hosts (any)** | **None.** Repo search for `googleusercontent`/`youtube`/`fonts.g*`/`gtag`/`cdn.*`/`unpkg`/`jsdelivr` → no matches in `app/`, `components/`, `lib/`. | clean — no external allow-list entries |
+
+**Proposed initial CSP (Report-Only target):**
+```
+default-src 'self';
+script-src 'self' 'sha256-<theme-init-hash>';
+style-src 'self' 'unsafe-inline';
+img-src 'self' https://image.tmdb.org data:;
+font-src 'self';
+connect-src 'self';
+frame-ancestors 'none';
+frame-src 'none';
+form-action 'self';
+base-uri 'self';
+object-src 'none';
+upgrade-insecure-requests;
+report-uri /api/csp-report; report-to csp-endpoint;
+```
+
+**Proposed static (enforced) headers:**
+`Strict-Transport-Security: max-age=63072000; includeSubDomains; preload` ·
+`X-Content-Type-Options: nosniff` · `X-Frame-Options: DENY` ·
+`Referrer-Policy: strict-origin-when-cross-origin` ·
+`Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()`
 
 ---
 
 ## 4. Risks & Edge Cases
 
-**Schedule / external:**
-- **Google verification latency (~2–3 business days)** + domain verification of the homepage, privacy,
-  and ToS URLs. The pages must be **live on the production domain** before this can start ⇒ deploy
-  ordering matters; build slack into the launch calendar.
-- If the production domain isn't finalized, the consent-screen registration cannot complete.
-
-**Account-deletion correctness (the high-risk surface):**
-- **JWT session strategy (`auth.ts:26`) means there is no server-side session to invalidate.** A
-  deleted user's already-issued JWT stays cryptographically valid until expiry. Mitigation to weigh:
-  short session lifetime, or a deleted-user check in the auth `session` callback (lookup user;
-  invalidate if gone — note this adds a DB read per request).
-- **`Event.userId` orphan scrub** must be inside the same transaction as the user delete, or a crash
-  mid-delete leaves dangling identity links. No FK enforces this — easy to forget.
-- **Host of an active room:** `Room` has no `userId` FK; deleting a user removes their `Member` row
-  but the room persists (auto-expires later). Acceptable, but the deletion path must not throw on
-  in-flight rooms/votes. Confirm cascade through `Member` → `Vote`/`WatchedMovie` doesn't deadlock
-  with the room cleanup cron.
-- **OAuth token disposal:** deleting the `Account` row removes our stored Google `refresh_token`/
-  `access_token`, but does **not** revoke Google's grant. Optional best practice: call Google's token
-  revocation endpoint on delete. Decide in/out of scope.
-- **Authorization:** the delete must derive the target strictly from the authenticated session
-  (`requireUserId()`), never from a client-supplied id — else it becomes an account-deletion IDOR.
-  Add a type-to-confirm step + rate-limit (fail-closed) to prevent accidental/abusive deletion.
-- **Idempotency / partial failure:** re-deleting or deleting a half-deleted account should be safe.
-
-**Privacy-policy truthfulness:**
-- The policy's retention claims must match reality (rooms: ~24h grace cron; events: 90d; account data:
-  until deletion). Any promise we can't keep is itself a violation.
-- **Residual email exposure** (carried from WP1b): `listFriends`/`GET /api/friends` still returns
-  `email` for established friends. Not enumeration, but the policy must accurately describe what
-  friends can see, or we close it here. (Decision — likely just disclose.)
-
-**Cookie/analytics consent (legal ambiguity):**
-- Strictly-necessary cookies need no consent. The **first-party, no-IP, pseudonymous analytics** is a
-  gray area under EU ePrivacy: defensible as legitimate-interest with disclosure + opt-out, but a
-  strict reading wants prior consent. Choosing "disclose + honor opt-out, no banner" is the
-  pragmatic default; a banner is the conservative option. **Owner risk decision.**
+- **CSP enforced too early → blank/broken app.** Mitigated: Report-Only first. Report-Only emits
+  violation reports but **blocks nothing**, so it is safe to deploy. Enforce is a separate, later
+  decision driven by observed reports.
+- **Dev HMR breakage.** React Fast Refresh needs `'unsafe-eval'` + a websocket `connect-src`. Mitigated:
+  gate the CSP header to `NODE_ENV === 'production'`.
+- **Hash drift.** If the inline theme script's bytes change, its `sha256` must be regenerated or the
+  script silently fails (in enforce) / reports (in Report-Only). Note in the IMPLEMENT step; keep the
+  hash adjacent to the script or document the regenerate step.
+- **`next/image` vs raw `<img>` for posters.** `next/image` proxies through same-origin
+  `/_next/image`, but the 3 raw `<img>` load `image.tmdb.org` **directly** — so `img-src` MUST include
+  `https://image.tmdb.org` (dropping it would break posters on the list/shared/friend views).
+- **HSTS `preload` is sticky.** `includeSubDomains; preload` is hard to undo and affects all
+  subdomains. Acceptable for a single production domain, but call it out for owner awareness; can ship
+  without `preload` first if the domain strategy is unsettled.
+- **`Permissions-Policy` over-restriction.** The app uses none of camera/mic/geo, so denying them is
+  safe; keep the list to features we can prove unused.
+- **Report endpoint as a noise/abuse sink.** `/api/csp-report` is unauthenticated by nature (browsers
+  post to it). Mitigate with a body-size cap and best-effort logging (drop on error), mirroring the
+  `/api/events` fail-open posture; consider reusing the existing rate-limit primitive from WP1a.
+- **M4 (if in scope): no behavior change expected, but broad import churn.** The split repoints
+  imports across 4 client + several server files; risk is purely mechanical (wrong import path →
+  typecheck failure, caught by `verify.sh`). The secret value does **not** currently leak (see §5), so
+  there is no live regression to guard against — only build-graph hygiene.
 
 ---
 
-## 5. Assumptions & Open Questions (gate PLAN — owner/decision inputs)
+## 5. Assumptions & Open Questions
 
-**Owner-supplied facts — RESOLVED / PLACEHOLDER (2026-06-21):**
-1. **Data-controller / legal identity → "Alexander Smith"** (individual). Named in privacy policy + ToS.
-2. **Contact email → PLACEHOLDER** (`[PRIVACY_CONTACT_EMAIL]`). Still unknown; insert as a placeholder
-   token throughout the pages/policy so a single find-replace fills it at launch.
-3. **Governing-law jurisdiction → State of Florida, USA.** ToS governing-law + venue clause.
-4. **Production domain → PLACEHOLDER** (`[PROD_DOMAIN]`). Still unknown. **Launch prerequisite, not a
-   drafting blocker** — pages/deletion flow/plan are written domain-agnostic with the placeholder; the
-   domain-dependent steps (Google consent-screen verification, `AUTH_URL`, `metadataBase`, published
-   policy URLs) are called out as a **pre-launch checklist**, not IMPLEMENT-cycle code.
-   - **Product name: "PikFlix"** is a **working name and may change before launch** — treat the brand
-     string as a single source-of-truth constant where practical so a rename is cheap.
+> **Checkpoint resolutions (owner, 2026-06-22):** Q1 → **H4 only, defer M4.** Q2/Q3 → **Report-Only
+> CSP first + first-party `/api/csp-report` sink.** Recorded below.
 
-**Design decisions — RESOLVED with the user 2026-06-21:**
-5. **v1 auth surface → BOTH (Google + email/password).** ⇒ the Google consent-screen registration +
-   brand/domain verification **IS a hard v1 launch blocker**; deploy ordering must put `/privacy` +
-   `/terms` live on the production domain **before** verification can start.
-6. **Deletion UX → self-serve in-app button (auth-gated, type-to-confirm) + documented email
-   fallback.** Satisfies Google's "in-app option AND web-accessible request" requirement.
-7. **Cookie/analytics consent → disclose + honor opt-out, no banner.** Treat first-party no-IP
-   analytics as legitimate interest; IMPLEMENT adds a localStorage opt-out flag + `track()`/`flush()`
-   guard + a settings toggle (see §2).
-8. **Regulatory coverage → one policy covering GDPR + CCPA/CPRA generically.**
+**Q1 — WP2 scope: is M4 (the `server-only` TMDB split) in this cycle? → RESOLVED: NO (H4 only).**
+- The 2026-06-21 audit/handoff bundled **H4 + M4** under "WP2 — HTTP hardening." The task framing
+  ("HTTP headers / CSP hardening only") scoped WP2 down to **H4**; **M4 is deferred to its own
+  follow-up cycle.**
+- **Finding that informed the call:** M4 is **latent, not an active leak.** `lib/tmdb.ts` reads
+  `process.env.TMDB_API_KEY` (line 88) — a **non-`NEXT_PUBLIC_`** var. Next.js **does not inline**
+  non-public env into client bundles; it substitutes `undefined`. So when `components/FilterControls.tsx`
+  imports the *value* `TMDB_GENRES` and drags the module in, the **key value never reaches the
+  browser** — only dead fetch/`Authorization`-header code does. The real win of `import 'server-only'`
+  is turning any *future* mistaken client import into a **build error** (defense-in-depth + bundle
+  hygiene), not closing a live hole — which is why deferring it is safe.
 
-**Still on recommended defaults (proceed unless corrected at plan-approval):**
-9. **Minimum age** — state a **13+** minimum (COPPA floor; 16 if targeting EU minors conservatively).
-10. **Google token revocation on delete** — local token deletion only for v1 (deleting the `Account`
-    row); calling Google's revocation endpoint is a noted follow-up.
+**Q2 — CSP enforcement posture → RESOLVED: Report-Only first.** Ship
+`Content-Security-Policy-Report-Only` via `next.config.ts` `headers()`, gated to production. The
+**enforce** flip + any nonce `middleware.ts` are deferred to a later cycle once reports are observed.
 
-**Owner-supplied facts (items 1–4 above) remain the only hard blocker to PLAN.**
+**Q3 — CSP report sink → RESOLVED: yes.** Add a first-party `app/api/csp-report/route.ts` (mirrors
+`/api/events`) to capture violations from real users.
 
-**Assumptions (will proceed on these unless corrected):**
-- Self-serve **data export/portability** is **not** built as code in WP6 — the policy commits to a
-  manual email-based fulfillment of access/portability requests (revisit later).
-- No schema/migration change is needed (deletion uses existing nullable `Event.userId` + cascade FKs).
-- The deleted-user JWT-invalidation hardening is in scope to *evaluate*; whether to add the per-request
-  DB check is a PLAN decision (perf trade-off).
+**OPEN QUESTION 4 — HSTS `preload` (still open, owner-facing).** Assumption: include
+`includeSubDomains; preload`. If the production domain / subdomain strategy is unsettled, ship without
+`preload` first. Overlaps the WP5/WP6 domain prerequisites; can be confirmed at PLAN time.
+
+**Standing assumptions:** production is HTTPS (Vercel) so HSTS is meaningful; the production domain is
+single-host; no third-party embeds/scripts will be added within this cycle.
 
 ---
 
-## 6. Out of Scope (explicitly excluded from this cycle)
+## 6. Out of Scope
 
-- **Actual Google Cloud Console configuration** (consent screen + domain verification) — owner action,
-  not committable code; WP6 produces the pages/URLs it consumes.
-- **Self-serve data-export/portability API** — deferred; satisfied via documented manual process.
-- **A full cookie-consent banner** — excluded unless decision (7) selects the banner option.
-- **Closing the WP1b residual** `GET /api/friends` email exposure as a *code* change — default is to
-  disclose it in the policy, not re-engineer it here (revisit if the owner prefers removal).
-- **WP2** (security headers/CSP), **WP3** (Sentry), **WP5** (env fail-fast incl. `AUTH_URL`/secret
-  assertion), **WP7** (deploy + backup/restore runbooks — incl. the still-open Supabase Free-plan
-  backup gap), **WP8** (next 16). Cross-WP note: WP5's `AUTH_URL`/prod-env work and WP6's domain need
-  are coupled — sequence them together when the domain is known.
+- **Flipping CSP to enforce** and the **per-request nonce `middleware.ts`** it requires — deferred to a
+  follow-up cycle after Report-Only telemetry.
+- **WP3 (Sentry/observability), WP5 (env fail-fast), WP7 (runbooks/backups), WP8 (`next` 16).**
+- **Any auth/session change** (`auth.ts`, `app/api/auth/`) — restricted; the CSP is tuned *around* the
+  existing OAuth redirect flow, not modifying it.
+- **`next.config.ts` `images.remotePatterns`** changes (e.g., adding `lh3.googleusercontent.com`) —
+  only needed if Google avatars are introduced, which they are not.
+- **New dependencies / migrations.**
+- **M4 (TMDB split) — OUT OF SCOPE** (per the Q1 resolution above; deferred to its own follow-up cycle).
 
 ---
 
-## 7. Readiness Verdict
+## 7. Readiness Verdict: READY FOR PLANNING
 
-**Technical approach: READY FOR PLANNING.** The code-side surface is fully mapped — the pages, the
-footer/consent links, the `DELETE /api/account` transaction (cascade + `Event.userId` scrub), and the
-deletion UI all reuse existing patterns with **no new dependencies and no migration**. All
-launch-blocking privacy requirements are identified (C1 pages + Google consent registration; M9
-deletion + event scrub; verified against Google's current OAuth + User-Data policies).
+The HTTP-layer surface is fully mapped: the app has **zero** security headers/CSP today; its real
+resource graph is **TMDB images + self-hosted fonts + first-party `/api/events` analytics + a
+redirect-based Google OAuth flow + one static inline theme script**, with **no third-party hosts**. The
+technical approach is settled and low-risk: **enforce static headers immediately + ship CSP
+Report-Only via `next.config.ts`**, with a first-party `/api/csp-report` sink, gated to production.
 
-**Design decisions 5–8 are RESOLVED** (2026-06-21): launch with both auth methods (Google verification
-is a v1 blocker), self-serve + email-fallback deletion, disclose-+-opt-out analytics, GDPR+CCPA
-coverage. **Owner facts resolved** (controller = Alexander Smith, jurisdiction = Florida) **with two
-launch-time placeholders** — `[PROD_DOMAIN]` and `[PRIVACY_CONTACT_EMAIL]`. Per the user's direction,
-these placeholders do **not** block drafting the pages, the deletion flow, or the plan; the
-domain-dependent items (Google OAuth verification, `AUTH_URL`, `metadataBase`, published policy URLs)
-are documented as **launch prerequisites**. **READY TO ADVANCE TO PLAN.**
+**Confirmed scope for WP2 (this cycle): H4 only** — static security headers (enforced) + a
+**Report-Only** CSP via `next.config.ts`, plus a first-party `app/api/csp-report/route.ts` sink, all
+gated to production. **M4 is deferred.** Anticipated `.workflow_plan_files` manifest (for PLAN):
+`next.config.ts` (headers + Report-Only CSP) and `app/api/csp-report/route.ts` (new), plus a test
+(`__tests__/...`) asserting the headers/CSP are present.
+
+**The cycle remains paused at the PLAN approval checkpoint.** The scope decision is made, but per the
+instruction no PLAN/IMPLEMENT work proceeds until the owner gives the go-ahead to enter PLAN
+(`/plan` / `bash scripts/advance_state.sh next`). No application code has been written.
