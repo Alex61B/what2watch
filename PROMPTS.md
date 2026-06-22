@@ -2,6 +2,22 @@
 
 A running log of the prompts that drove each workflow cycle.
 
+## 2026-06-22 — WP2: HTTP security headers & CSP hardening (RESEARCH)
+
+**Prompt (summary):** After a stopping point — first open a standalone WP4 PR off `chore/dep-hardening`
+(rebased clean against `main`; PR #25), confirm no other open engineering PRs, and re-orient against
+`docs/session-handoff-2026-06-22.md` + current `main`. Then begin a fresh **RESEARCH** cycle for
+**WP2 — HTTP headers / CSP hardening only**: audit current header/CSP posture, identify missing
+headers, determine immediate-vs-phased CSP (report-only first vs enforce), verify impact on Google
+auth / TMDB images / fonts / analytics / third-party resources, and confirm whether the server-only
+TMDB split (M4) stays in WP2. Produce a 7-section `docs/research.md` and **stop at the PLAN approval
+checkpoint** — no implementation until reviewed.
+
+**Checkpoint decisions (owner):** WP2 scope = **H4 only** (defer M4 to its own follow-up — M4 is a
+latent build-hygiene issue, not an active key leak); CSP posture = **Report-Only first** via
+`next.config.ts` + a first-party `app/api/csp-report` sink, gated to production. Enforce flip + nonce
+middleware deferred. Paused in RESEARCH awaiting go-ahead to enter PLAN.
+
 ## 2026-06-21 — WP6: Privacy & data lifecycle (privacy/terms + account deletion)
 
 **Prompt (summary):** Begin **WP6** (the C1 launch blocker) in RESEARCH-only, then proceed to

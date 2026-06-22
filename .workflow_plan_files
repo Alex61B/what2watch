@@ -1,2 +1,7 @@
-package.json
-package-lock.json
+lib/theme-init.ts
+lib/security-headers.ts
+next.config.ts
+app/layout.tsx
+app/api/csp-report/route.ts
+__tests__/lib/security-headers.test.ts
+__tests__/api/csp-report.test.ts
